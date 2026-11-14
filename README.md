@@ -66,23 +66,30 @@
 | `--telemetry` | FRSKY_HUB, HOTT, IBUS_EXTENDED, LTM, MAVLINK, SMARTPORT, SRXL, none (также списком; CRSF/GHOST/FPORT/JETIEXBUS включают телеметрию автоматически) |
 | `--osd` | Analog, Digital, FrSky, none (можно несколько) |
 | `--motor` | BRUSHED, DSHOT, MULTISHOT, ONESHOT, PROSHOT, PWM |
-| `-f, --feat` | остальные опции именами из UI, через запятую или параметром повторно |
+| `-f, --feat` | остальные опции именами из UI, через запятую или параметром повторно; имена распознаются без учёта регистра/разделителей и принимаются также имена defines (`MAG` → `USE_MAG`, `IBUS_EXTENDED` → `USE_TELEMETRY_IBUS_EXTENDED`); запятые внутри скобок не режут список — `-f "EMFAT (AutoRun, Icon)"` |
 | `-D, --define` | произвольный define мимо API (например `USE_EMFAT_TOOLS`) |
 | `-v, --verbose` | печатать расшифровку опций: `# имя -> DEFINE`, `# auto: +DEFINE` (по умолчанию молчит) |
 | `--plain` | не добавлять `CLOUD_BUILD`: опции накладываются поверх «всех по умолчанию» |
+| `--no-auto` | только для опытных: никаких авто-дополнений вообще; `--radio/--telemetry/--osd/--motor` при этом запрещены — все defines задаются через `-f`/`-D` |
 | `--list-options` | все опции выбранной версии BF живьём из API |
 
 Выбранные опции транслируются в defines по официальному API
 `https://build.betaflight.com/api/options/<версия>` и передаются в `make OPTIONS=...`
 с префиксом `CLOUD_BUILD` (так же работает облачная сборка беты: в прошивку попадает
 ровно выбранный набор; без флагов опций собирается plain-сборка со всеми фичами по умолчанию).
-Скрипт так же, как официальный сервер, автоматически добавляет «зонтичные» defines
-(`USE_SERIALRX_*` → `USE_SERIALRX`, `USE_TELEMETRY_*` → `USE_TELEMETRY`,
-`USE_RX_PPM` → `USE_PPM`, `USE_GPS` → `USE_ALTITUDE_HOLD/USE_GPS_PLUS_CODES/USE_POSITION_HOLD`,
-OSD → `USE_OSD`) — без них часть опций не попадает в прошивку (см. раздел
-«ELRS / управляющие каналы приёмника»).
+Скрипт так же, как официальный сервер, автоматически добавляет «зонтичные» и
+сопутствующие defines (`USE_SERIALRX_*` → `USE_SERIALRX`, `USE_TELEMETRY_*` →
+`USE_TELEMETRY`, `USE_RX_PPM` → `USE_PPM`, `USE_GPS` → `USE_ALTITUDE_HOLD/
+USE_GPS_PLUS_CODES/USE_POSITION_HOLD`, `USE_FLIGHT_PLAN` → `USE_GPS + USE_ALTITUDE_HOLD
++ USE_POSITION_HOLD`, `USE_EMFAT_TOOLS` → `USE_EMFAT_AUTORUN + USE_EMFAT_ICON`,
+`USE_ESCSERIAL_SIMONK` → `USE_SERIAL_4WAY_SK_BOOTLOADER`, `USE_LED_STRIP_64` →
+`USE_LED_STRIP`, OSD → `USE_OSD`) — без них часть опций не попадает в прошивку
+(см. раздел «ELRS / управляющие каналы приёмника»). Правила взяты из официальной
+документации ([`docs/development/Defines.md`](https://github.com/betaflight/betaflight.com/blob/main/docs/development/Defines.md)
+и [`docs/wiki/guides/current/Build-Options.md`](https://github.com/betaflight/betaflight.com/blob/main/docs/wiki/guides/current/Build-Options.md)
+репозитория betaflight.com) и сверены с эхом `POST /api/builds`.
 Для `--radio CRSF/GHOST/FPORT/JETIEXBUS` телеметрия добавляется автоматически
-(строка «Automatically included» в UI).
+(строка «Automatically included» в UI). Всё это отключается экспертным `--no-auto`.
 
 ### Прочие параметры
 
@@ -181,10 +188,10 @@ Betaflight затем сами доопределяют и «вычищают» 
 | Источник | Когда | Что добавляет |
 |---|---|---|
 | Configurator (мастер прошивки) | облачная сборка | только выбранные значения (`USE_SERIALRX_CRSF`, …) + `CLOUD_BUILD` (или `CORE_BUILD`); никаких зонтиков и телеметрий — `src/composables/useCloudBuild.ts` |
-| сервер build.betaflight.com | `POST /api/builds` | `USE_SERIALRX_* → USE_SERIALRX`; `USE_TELEMETRY_* → USE_TELEMETRY`; `USE_RX_PPM → USE_PPM`; `USE_GPS → USE_ALTITUDE_HOLD + USE_GPS_PLUS_CODES + USE_POSITION_HOLD` (проверено по эху запроса) |
-| `build_generic.sh` | всегда | `CLOUD_BUILD` (если не `--plain`); defines из API по вашим `--radio/--telemetry/--osd/--motor/-f`; те же авто-дополнения, что и сервер, + `USE_OSD` для OSD-протоколов + `USE_TELEMETRY + USE_TELEMETRY_MAVLINK` для `USE_SERIALRX_MAVLINK` |
+| сервер build.betaflight.com | `POST /api/builds` | `USE_SERIALRX_* → USE_SERIALRX`; `USE_TELEMETRY_* → USE_TELEMETRY`; `USE_RX_PPM → USE_PPM`; `USE_GPS → USE_ALTITUDE_HOLD + USE_GPS_PLUS_CODES + USE_POSITION_HOLD`; `USE_FLIGHT_PLAN → USE_GPS + USE_ALTITUDE_HOLD + USE_POSITION_HOLD`; `USE_EMFAT_TOOLS → USE_EMFAT_AUTORUN + USE_EMFAT_ICON`; `USE_ESCSERIAL_SIMONK → USE_SERIAL_4WAY_SK_BOOTLOADER`; `USE_LED_STRIP_64 → USE_LED_STRIP`; `USE_OSD` только с `USE_OSD_SD` (проверено по эху запроса) |
+| `build_generic.sh` | всегда | `CLOUD_BUILD` (если не `--plain`); defines из API по вашим `--radio/--telemetry/--osd/--motor/-f`; те же авто-дополнения, что и сервер, + `USE_OSD` для всех OSD-протоколов + `USE_TELEMETRY + USE_TELEMETRY_MAVLINK` для `USE_SERIALRX_MAVLINK`; всё это отключает `--no-auto` |
 | Makefile Betaflight | при сборке | `OPTIONS="X Y"` → глобальные `-DX -DY` (`Makefile:375`, `mk/preprocess.mk:16`); `CORE_BUILD` — минимальный набор фич |
-| `common_pre.h` | при компиляции | без `CLOUD_BUILD` — дефолты всех фич (блок `:72–282`); вне зависимости от режима: `USE_RX_MSP/USE_RX_MSP_OVERRIDE/USE_RX_RSSI_DBM/USE_RX_RSNR/USE_RX_LINK_UPLINK_POWER` (`:408–412`); цепочки: `USE_VTX → USE_VTX_COMMON/CONTROL/SMARTAUDIO/TRAMP/MSP/TABLE` (`:337`), `USE_SERIALRX_CRSF → USE_CRSF_V3` (+CMS-телеметрия/линк-статистика при CRSF-телеметрии, `:481`), `USE_SERIALRX_MAVLINK → USE_TELEMETRY_MAVLINK` (`:494`), `USE_TELEMETRY_SRXL → USE_SERIALRX_SPEKTRUM + управление VTX Spektrum` (`:395` for USE_TELEMETRY_SRXL), `USE_GPS+USE_OSD → USE_CMS_GPS_RESCUE_MENU` |
+| `common_pre.h` | при компиляции | без `CLOUD_BUILD` — дефолты всех фич (блок `:72–282`); вне зависимости от режима: `USE_RX_MSP/USE_RX_MSP_OVERRIDE/USE_RX_RSSI_DBM/USE_RX_RSNR/USE_RX_LINK_UPLINK_POWER` (`:408–412`); цепочки: `USE_VTX → USE_VTX_COMMON/CONTROL/SMARTAUDIO/TRAMP/MSP/TABLE` (`:337`), `USE_SERIALRX_CRSF → USE_CRSF_V3` (+CMS-телеметрия/линк-статистика при CRSF-телеметрии, `:481`), `USE_SERIALRX_MAVLINK → USE_TELEMETRY_MAVLINK` (`:494`), `USE_TELEMETRY_SRXL → USE_SERIALRX_SPEKTRUM + управление VTX Spektrum` (`:395` for USE_TELEMETRY_SRXL), `USE_GPS+USE_OSD → USE_CMS_GPS_RESCUE_MENU`, `USE_OSD_HD`/`USE_FRSKYOSD` без `USE_OSD_SD` → `#undef USE_MAX7456` (`:457`) |
 | `common_post.h` | «уборка» | сиротливые defines удаляются: без `USE_SERIALRX` — все `USE_SERIALRX_*` (`:340`), без `USE_TELEMETRY` — все `USE_TELEMETRY_*` (`:355`), без `USE_SERIALRX_CRSF` — `USE_TELEMETRY_CRSF/USE_CRSF_V3` (`:393`); FPORT/IBUS_EXTENDED/JETIEXBUS, напротив, сами возвращают себе `USE_TELEMETRY + USE_TELEMETRY_*` (`:368–392`) |
 | платформенный `src/platform/*/target/*/target.h` | на каждый MCU | драйверы MCU: STM32H743 — `USE_I2C/USE_SPI/USE_ADC/USE_BEEPER/USE_ESCSERIAL…`, а `USE_SDCARD → USE_SDCARD_SPI + USE_SDCARD_SDIO + ENABLE_SDIO_INIT` (`:71–81`) |
 | `config.h` платы (betaflight/config или кастомный) | на каждую плату | `USE_SDCARD`, пины SDIO/UART/I2C, `DEFAULT_BLACKBOX_DEVICE`, `VTX_DATA_PIN`, пины SPI-ELRS и т.п. |
@@ -264,7 +271,20 @@ build.betaflight.com добавляет такие авто-defines сам (пр
 | `USE_SERIALRX_MAVLINK` | `USE_SERIALRX + USE_TELEMETRY + USE_TELEMETRY_MAVLINK` |
 | `USE_RX_PPM` | `USE_PPM` |
 | `USE_GPS` | `USE_ALTITUDE_HOLD`, `USE_GPS_PLUS_CODES`, `USE_POSITION_HOLD` |
+| `USE_FLIGHT_PLAN` | `USE_GPS`, `USE_ALTITUDE_HOLD`, `USE_POSITION_HOLD` |
+| `USE_EMFAT_TOOLS` | `USE_EMFAT_AUTORUN`, `USE_EMFAT_ICON` |
+| `USE_ESCSERIAL_SIMONK` | `USE_SERIAL_4WAY_SK_BOOTLOADER` |
+| `USE_LED_STRIP_64` | `USE_LED_STRIP` |
 | OSD `USE_OSD_SD/HD` / `USE_FRSKYOSD` | `USE_OSD` |
+
+Все эти дополнения отключаются экспертным `--no-auto` (при нём `--radio/--telemetry/--osd/--motor`
+запрещены, и в `make` уходит ровно то, что перечислено в `-f`/`-D`).
+
+Скрипт также предупреждает (сборку не меняя) о случаях, когда выбранная опция будет
+«вымыта» заголовками Betaflight: `--telemetry SRXL` без `--radio SPEKTRUM/SRXL2`
+(`common_post.h:438` убирает `USE_TELEMETRY_SRXL` — в прошивке не будет ни SRXL, ни
+Spektrum-приёмника) и `-f "Position Hold"` без GPS/Optical Flow (`common_post.h:907` —
+сборка падает с `#error`, если платы не дают `USE_OPTICALFLOW` в `config.h`).
 
 (добавки видны с `-v` в выводе как `# auto: +USE_SERIALRX`; `USE_CRSF_V3` включает
 сам Makefile — `common_pre.h:481`). Для радио **MAVLINK** скрипт добавляет

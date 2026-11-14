@@ -60,6 +60,11 @@ Options:
                            # auto: +DEFINE)
   --plain                  do not add CLOUD_BUILD: chosen options are layered on
                            top of the "all features by default" (plain make build)
+  --no-auto                experts only: no auto-completion at all (no USE_SERIALRX /
+                           USE_TELEMETRY umbrellas, no radio-included telemetry, no
+                           GPS/Flight Plan/EMFAT/4way additions) and --radio,
+                           --telemetry, --osd, --motor are rejected — you list every
+                           define yourself with -f / -D
   --preview, --dry-run     print the docker/make command instead of building
   --list-options           full list of all options of the chosen BF version (from API)
   --list-configs           list of standard board configs
@@ -86,10 +91,34 @@ Result: dist/betaflight_<version>_<target>.hex (elf/map — in betaflight/obj/)
 EOF
 }
 
+# split a comma-separated list keeping commas inside parentheses intact
+# (the option "EMFAT (AutoRun, Icon)" contains a comma in its UI name)
+split_list() {
+    _SPLIT=()
+    local s="$1" cur="" depth=0 i c t
+    for ((i = 0; i < ${#s}; i++)); do
+        c="${s:i:1}"
+        if [ "$c" = "(" ]; then depth=$((depth + 1))
+        elif [ "$c" = ")" ] && ((depth > 0)); then depth=$((depth - 1))
+        elif [ "$c" = "," ] && ((depth == 0)); then
+            _SPLIT+=("$cur")
+            cur=""
+            continue
+        fi
+        cur+="$c"
+    done
+    _SPLIT+=("$cur")
+    for t in "${!_SPLIT[@]}"; do
+        c="${_SPLIT[$t]}"
+        _SPLIT[$t]="${c#"${c%%[![:space:]]*}"}"
+        _SPLIT[$t]="${_SPLIT[$t]%"${_SPLIT[$t]##*[![:space:]]}"}"
+    done
+}
+
 # ------------------------------ argument parsing ------------------------------
 declare -a FEATS=() DEFINES=() RADIOS=() TELEMETRIES=() OSDS=() MOTORS=()
 CONFIG_SRC="" NAME_ARG="" TARGET_ARG=""
-TARGET_MODE=0 PLAIN=0 PREVIEW=0 VERBOSE=0 LIST_OPTS=0 LIST_CFG=0 LIST_TGT=0
+TARGET_MODE=0 PLAIN=0 PREVIEW=0 VERBOSE=0 NO_AUTO=0 LIST_OPTS=0 LIST_CFG=0 LIST_TGT=0
 
 while (($#)); do
     case "$1" in
@@ -98,13 +127,14 @@ while (($#)); do
         -c|--config)     CONFIG_SRC="$2"; shift 2;;
         -n|--name)       NAME_ARG="$2"; shift 2;;
         -t|--target)     TARGET_ARG="$2"; shift 2;;
-        -f|--feat)       IFS=',' read -ra _p <<<"$2"; FEATS+=("${_p[@]}"); shift 2;;
+        -f|--feat)       split_list "$2"; FEATS+=("${_SPLIT[@]}"); shift 2;;
         -D|--define)     DEFINES+=("$2"); shift 2;;
-        --radio)         IFS=',' read -ra _p <<<"$2"; RADIOS+=("${_p[@]}"); shift 2;;
-        --telemetry)     IFS=',' read -ra _p <<<"$2"; TELEMETRIES+=("${_p[@]}"); shift 2;;
-        --osd)           IFS=',' read -ra _p <<<"$2"; OSDS+=("${_p[@]}"); shift 2;;
-        --motor)         IFS=',' read -ra _p <<<"$2"; MOTORS+=("${_p[@]}"); shift 2;;
+        --radio)         split_list "$2"; RADIOS+=("${_SPLIT[@]}"); shift 2;;
+        --telemetry)     split_list "$2"; TELEMETRIES+=("${_SPLIT[@]}"); shift 2;;
+        --osd)           split_list "$2"; OSDS+=("${_SPLIT[@]}"); shift 2;;
+        --motor)         split_list "$2"; MOTORS+=("${_SPLIT[@]}"); shift 2;;
         --plain)         PLAIN=1; shift;;
+        --no-auto)       NO_AUTO=1; shift;;
         -v|--verbose)    VERBOSE=1; shift;;
         --preview|--dry-run) PREVIEW=1; shift;;
         --list-options)  LIST_OPTS=1; shift;;
@@ -115,6 +145,14 @@ while (($#)); do
         *)               NAME_ARG="$1"; shift;;
     esac
 done
+
+# --no-auto is an experts-only mode: the Configurator-style wizard flags are off,
+# the user lists every define by hand (-f "<UI name>" / -D USE_XXX).
+if ((NO_AUTO)) && ((${#RADIOS[@]} || ${#TELEMETRIES[@]} || ${#OSDS[@]} || ${#MOTORS[@]})); then
+    echo "Error: --no-auto (experts only) does not accept --radio/--telemetry/--osd/--motor." >&2
+    echo "  Use -f \"<UI name>\" (see --list-options) or -D USE_XXX for every define." >&2
+    exit 1
+fi
 
 cd "$(dirname "$0")"
 mkdir -p .build
@@ -277,8 +315,8 @@ if ((${#MAP_SEL[@]} || ${#DEFINES[@]})); then HAVE_OPTS=1; fi
 OPTIONS=""
 if ((HAVE_OPTS)); then
     fetch_options
-    DEFS="$(BF_VERBOSE="$VERBOSE" python3 - "$OPT_JSON" "${MAP_SEL[@]+"${MAP_SEL[@]}"}" <<'PY'
-import json, os, sys
+    DEFS="$(BF_VERBOSE="$VERBOSE" BF_NO_AUTO="$NO_AUTO" python3 - "$OPT_JSON" "${MAP_SEL[@]+"${MAP_SEL[@]}"}" <<'PY'
+import json, os, re, sys
 
 path = sys.argv[1]
 tokens = [t.split("\t", 1) for t in sys.argv[2:]]
@@ -294,8 +332,30 @@ radio_telemetry = {"USE_SERIALRX_CRSF": "USE_TELEMETRY_CRSF",
                    "USE_SERIALRX_GHST": "USE_TELEMETRY_GHST",
                    "USE_SERIALRX_JETIEXBUS": "USE_TELEMETRY_JETIEXBUS"}
 
+def norm(s):
+    # case- and separator-insensitive: "IBUS EXTENDED" == "ibus_extended" == "use_telemetry_ibus_extended"-suffix
+    return re.sub(r"[^a-z0-9]+", "", s.lower())
+
+# define name variants a token can match: the full define and the define without
+# its section prefix (MAG -> USE_MAG, CRSF -> USE_SERIALRX_CRSF, IBUS_EXTENDED ->
+# USE_TELEMETRY_IBUS_EXTENDED)
+VAL_PREFIXES = ("USE_SERIALRX_", "USE_TELEMETRY_", "USE_RX_", "USE_OSD_", "USE_")
+
+def variants(it):
+    out = {norm(it["name"])}
+    if it.get("groupedName"):
+        out.add(norm(it["groupedName"]))
+    v = it["value"]
+    names = [v]
+    for p in VAL_PREFIXES:
+        if v.startswith(p) and len(v) - len(p) >= 3:
+            names.append(v[len(p):])
+    for n in names:
+        out.add(norm(n))
+    return out
+
 def lookup(sec_wanted, tok):
-    t = tok.strip().lower()
+    t = norm(tok)
     cands = []
     for sec, items in sections:
         for it in items:
@@ -307,16 +367,13 @@ def lookup(sec_wanted, tok):
                     continue
                 if sec_wanted != "osd" and sec != sec_wanted:
                     continue
-            name = it["name"].lower()
-            grouped = (it.get("groupedName") or "").lower()
-            val = it["value"].lower()
-            if t == name or t == val or (grouped and t == grouped):
+            if t in variants(it):
                 cands.append((sec, it))
     if not cands:
         return None
     if len(cands) > 1:
         strict = [c for c in cands
-                  if c[1]["name"].lower() == t or c[1]["value"].lower() == t]
+                  if norm(c[1]["name"]) == t or norm(c[1]["value"]) == t]
         if len(strict) == 1:
             cands = strict
     if len(cands) > 1:
@@ -326,6 +383,7 @@ def lookup(sec_wanted, tok):
     return cands[0]
 
 defines, notes = [], []
+no_auto = os.environ.get("BF_NO_AUTO") == "1"
 for sec_wanted, tok in tokens:
     if tok.strip().lower() in ("none", ""):
         continue
@@ -337,6 +395,8 @@ for sec_wanted, tok in tokens:
     sec, it = hit
     defines.append(it["value"])
     notes.append(f"{it['name']} -> {it['value']}")
+    if no_auto:
+        continue
     if it["value"] in ("USE_OSD_SD", "USE_OSD_HD", "USE_FRSKYOSD"):
         defines.append("USE_OSD")
     if sec == "radio" and it.get("includesTelemetry"):
@@ -365,14 +425,24 @@ PY
     OPT_LIST+=("${_d[@]}")
     for u in "${DEFINES[@]+"${DEFINES[@]}"}"; do OPT_LIST+=("$u"); done
 
-    # umbrella defines added the same way by build.betaflight.com (without them
-    # common_post.h drops the protocols: USE_SERIALRX_* won't compile without USE_SERIALRX).
-    # MAVLINK additionally needs USE_TELEMETRY(+MAVLINK): the SERIALRX_MAVLINK provider
-    # can not work without TELEMETRY_MAVLINK (common_pre.h:494), but the build server
-    # does not send it and common_post.h:355 sweeps it out without the USE_TELEMETRY umbrella:
+    # auto-defines the official build.betaflight.com adds (rules per
+    # betaflight.com docs: development/Defines.md + wiki/Build-Options.md, verified
+    # against the POST /api/builds request echo). common_post.h sweeps orphan
+    # defines, so USE_SERIALRX_* won't compile without the USE_SERIALRX umbrella.
+    # MAVLINK additionally gets USE_TELEMETRY(+MAVLINK): the SERIALRX_MAVLINK provider
+    # can not work without TELEMETRY_MAVLINK (common_pre.h:494 auto-defines it outside
+    # the CLOUD_BUILD gate, but being belt-and-braces we pass the umbrella explicitly):
     #   USE_SERIALRX_* -> USE_SERIALRX, USE_TELEMETRY_* -> USE_TELEMETRY,
     #   USE_SERIALRX_MAVLINK -> USE_TELEMETRY + USE_TELEMETRY_MAVLINK,
-    #   USE_RX_PPM -> USE_PPM, USE_GPS -> USE_ALTITUDE_HOLD/USE_GPS_PLUS_CODES/USE_POSITION_HOLD
+    #   USE_RX_PPM -> USE_PPM, USE_GPS -> USE_ALTITUDE_HOLD/USE_GPS_PLUS_CODES/USE_POSITION_HOLD,
+    #   USE_FLIGHT_PLAN -> USE_GPS + USE_ALTITUDE_HOLD + USE_POSITION_HOLD,
+    #   USE_EMFAT_TOOLS -> USE_EMFAT_AUTORUN + USE_EMFAT_ICON,
+    #   USE_ESCSERIAL_SIMONK -> USE_SERIAL_4WAY_SK_BOOTLOADER,
+    #   USE_LED_STRIP_64 -> USE_LED_STRIP
+    # (EMFAT_*/4WAY_SK are only in the !CLOUD_BUILD defaults of common_pre.h, so
+    # cloud builds really need them passed explicitly.)
+    # --no-auto (experts only) turns all of this off: OPTIONS is exactly what -f/-D gave.
+    if ((NO_AUTO == 0)); then
     declare -a _exp=()
     for o in "${OPT_LIST[@]}"; do
         case "$o" in
@@ -381,6 +451,10 @@ PY
             USE_TELEMETRY_*) _exp+=("USE_TELEMETRY");;
             USE_RX_PPM)      _exp+=("USE_PPM");;
             USE_GPS)         _exp+=("USE_ALTITUDE_HOLD" "USE_GPS_PLUS_CODES" "USE_POSITION_HOLD");;
+            USE_FLIGHT_PLAN) _exp+=("USE_GPS" "USE_ALTITUDE_HOLD" "USE_POSITION_HOLD");;
+            USE_EMFAT_TOOLS) _exp+=("USE_EMFAT_AUTORUN" "USE_EMFAT_ICON");;
+            USE_ESCSERIAL_SIMONK) _exp+=("USE_SERIAL_4WAY_SK_BOOTLOADER");;
+            USE_LED_STRIP_64) _exp+=("USE_LED_STRIP");;
         esac
     done
     for o in "${_exp[@]+"${_exp[@]}"}"; do
@@ -393,6 +467,26 @@ PY
             if ((VERBOSE)); then echo "  # auto: +$o" >&2; fi
         fi
     done
+    fi
+    # documented sweeps that silently drop a chosen option (warn, don't change defines):
+    #  - USE_TELEMETRY_SRXL is undefined by common_post.h:438 unless the build has
+    #    USE_SERIALRX_SPEKTRUM or USE_SERIALRX_SRXL2 (common_pre.h:395 pulls SPEKTRUM
+    #    in, but common_post.h:340 sweeps it when there is no USE_SERIALRX umbrella);
+    #  - USE_POSITION_HOLD without USE_GPS/USE_OPTICALFLOW stops the build with
+    #    #error (common_post.h:907) unless the board config.h supplies one.
+    if [[ " ${OPT_LIST[*]} " == *" USE_TELEMETRY_SRXL "*
+          && " ${OPT_LIST[*]} " != *" USE_SERIALRX "*
+          && " ${OPT_LIST[*]} " != *" USE_SERIALRX_SPEKTRUM "*
+          && " ${OPT_LIST[*]} " != *" USE_SERIALRX_SRXL2 "* ]]; then
+        echo "Warning: SRXL telemetry needs a Spektrum/SRXL2 receiver: add --radio SPEKTRUM or SRXL2," >&2
+        echo "         otherwise common_post.h:438 removes USE_TELEMETRY_SRXL from the firmware." >&2
+    fi
+    if [[ " ${OPT_LIST[*]} " == *" USE_POSITION_HOLD "*
+          && " ${OPT_LIST[*]} " != *" USE_GPS "*
+          && " ${OPT_LIST[*]} " != *" USE_OPTICALFLOW "* ]]; then
+        echo "Warning: USE_POSITION_HOLD requires USE_GPS and/or USE_OPTICALFLOW (common_post.h:907" >&2
+        echo "         #error) - add -f \"GPS\"/\"Optical Flow\" unless the board config.h defines one." >&2
+    fi
     OPTIONS="${OPT_LIST[*]}"
 fi
 
