@@ -355,6 +355,30 @@ PY
     read -ra _d <<<"$DEFS"
     OPT_LIST+=("${_d[@]}")
     for u in "${DEFINES[@]+"${DEFINES[@]}"}"; do OPT_LIST+=("$u"); done
+
+    # авто-дополнения, которые делает и build.betaflight.com (без них common_post.h
+    # выкизывает протоколы: USE_SERIALRX_* без USE_SERIALRX не компилируются):
+    #   USE_SERIALRX_* -> USE_SERIALRX, USE_TELEMETRY_* -> USE_TELEMETRY,
+    #   USE_RX_PPM -> USE_PPM, USE_GPS -> USE_ALTITUDE_HOLD/USE_GPS_PLUS_CODES/USE_POSITION_HOLD
+    declare -a _exp=()
+    for o in "${OPT_LIST[@]}"; do
+        case "$o" in
+            USE_SERIALRX_*)  _exp+=("USE_SERIALRX");;
+            USE_TELEMETRY_*) _exp+=("USE_TELEMETRY");;
+            USE_RX_PPM)      _exp+=("USE_PPM");;
+            USE_GPS)         _exp+=("USE_ALTITUDE_HOLD" "USE_GPS_PLUS_CODES" "USE_POSITION_HOLD");;
+        esac
+    done
+    for o in "${_exp[@]+"${_exp[@]}"}"; do
+        present=0
+        for e in "${OPT_LIST[@]}"; do
+            if [ "$e" = "$o" ]; then present=1; break; fi
+        done
+        if ((present == 0)); then
+            OPT_LIST+=("$o")
+            echo "  # авто: +$o" >&2
+        fi
+    done
     OPTIONS="${OPT_LIST[*]}"
 fi
 

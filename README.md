@@ -70,6 +70,11 @@
 `https://build.betaflight.com/api/options/<версия>` и передаются в `make OPTIONS=...`
 с префиксом `CLOUD_BUILD` (так же работает облачная сборка беты: в прошивку попадает
 ровно выбранный набор; без флагов опций собирается plain-сборка со всеми фичами по умолчанию).
+Скрипт так же, как официальный сервер, автоматически добавляет «зонтичные» defines
+(`USE_SERIALRX_*` → `USE_SERIALRX`, `USE_TELEMETRY_*` → `USE_TELEMETRY`,
+`USE_RX_PPM` → `USE_PPM`, `USE_GPS` → `USE_ALTITUDE_HOLD/USE_GPS_PLUS_CODES/USE_POSITION_HOLD`,
+OSD → `USE_OSD`) — без них часть опций не попадает в прошивку (см. раздел
+«ELRS / управляющие каналы приёмника»).
 Для `--radio CRSF/GHOST/FPORT/JETIEXBUS` телеметрия добавляется автоматически
 (строка «Automatically included» в UI).
 
@@ -215,11 +220,28 @@
 
 Флагов вида `USE_ELRSV4` в Betaflight 2026.6.2 нет — ни в build API, ни в
 исходниках. Внешний ELRS-приёмник (любой версии, включая 4.x), подключённый
-к UART, — это протокол CRSF: `--radio CRSF` уже добавляет всё необходимое
-(`USE_SERIALRX_CRSF`, телеметрию и `USE_CRSF_V3` автоматически,
-`common_pre.h:443`). Проверить в прошивке: `LOAD .../rx/crsf.o`,
-`.../telemetry/crsf.o`, символы `serialRx*`/`rxInit` в map (статический
-`crsfRxInit` LTO встраивает в `rxInit`, отдельным символом он не виден).
+к UART, — это протокол CRSF: `--radio CRSF`.
+
+**Важный нюанс `CLOUD_BUILD`:** одного `USE_SERIALRX_CRSF` недостаточно —
+нужен ещё «зонтичный» define `USE_SERIALRX`, иначе `common_post.h:261`
+отключает все `USE_SERIALRX_*` протоколы и в прошивке не оказывается никакого
+UART-приёмника (во вкладке «Режим приёмника» доступен только MSP). Официальный
+build.betaflight.com добавляет такие авто-defines сам (проверено по эху
+`POST /api/builds`), и скрипт повторяет его правила:
+
+| Выбрано | Скрипт добавляет автоматически |
+|---|---|
+| любой `USE_SERIALRX_*` (CRSF, SBUS, FPORT, SRXL2, ...) | `USE_SERIALRX` |
+| любой `USE_TELEMETRY_*` | `USE_TELEMETRY` |
+| `USE_RX_PPM` | `USE_PPM` |
+| `USE_GPS` | `USE_ALTITUDE_HOLD`, `USE_GPS_PLUS_CODES`, `USE_POSITION_HOLD` |
+| OSD `USE_OSD_SD/HD` / `USE_FRSKYOSD` | `USE_OSD` |
+
+(добавки видны в выводе как `# авто: +USE_SERIALRX`; `USE_CRSF_V3` включает
+сам Makefile — `common_pre.h:443`). Пропроверить UART-RX в готовой прошивке:
+`arm-none-eabi-nm obj/main/*.elf | grep -i crsf` — должны быть `crsfDataReceive`,
+`crsfChannelData` и т.п. Прошивки, собранные до добавления этого правила,
+CRSF-приёмник не содержали — перешейте заново.
 
 В «Портах» на UART приёмника должна стоять функция **Serial RX** (TX
 приёмника → RX платы), во вкладке «Приёмник» протокол — **CRSF**; фича
@@ -240,8 +262,8 @@ MicoAir743V2 встроенного приёмника нет.
 
 | Цель | Результат |
 |---|---|
-| `MICOAIR743V2_EXTMAG` (кастомный конфиг MicoAir, опции со скриншота) | hex 1,2 МБ, FLASH1 421 КБ (23,3 %), RAM 15,3 % — в map подтверждены CRSF+телеметрия, OSD HD, DSHOT, alt-hold, chirp, dashboard, pinio, ledstrip; нет GPS и MAX7456 |
-| `MICOAIR743V2` (стандартный конфиг + GPS, VTX) | FLASH1 467 КБ (25,4 %) |
+| `MICOAIR743V2_EXTMAG` (кастомный конфиг MicoAir, опции со скриншота) | hex 1,2 МБ, FLASH ~430 КБ (24 %), RAM 15,3 % — в elf подтверждены CRSF-RX (`crsfDataReceive`), телеметрия, OSD HD, DSHOT, alt-hold, chirp, dashboard, pinio, ledstrip; нет GPS и MAX7456 |
+| `MICOAIR743V2` (стандартный конфиг + GPS, VTX; GPS авто-тянет alt-hold/poshold) | FLASH1 490 КБ (26,7 %) |
 | `-t STM32H743 --motor DSHOT` (CLOUD_BUILD, минимум) | FLASH1 276 КБ |
 
 ## Прошивка готовой прошивки

@@ -53,6 +53,15 @@ dist/              # готовые .hex
 - При задании любой опции добавляется `CLOUD_BUILD` (как в облачной сборке
   Betaflight) — иначе `common_pre.h` включает **все** фичи по умолчанию, и
   прошивка получается другой. Флаг `--plain` отключает `CLOUD_BUILD`.
+- **Зонтичные defines:** `CLOUD_BUILD`-сборка обязана передавать `USE_SERIALRX`
+  при любом `USE_SERIALRX_*` протоколе — иначе `common_post.h:261` делает
+  `#undef` всех протоколов serial RX, и в прошивке нет UART-приёмника
+  (в Configurator «Режим приёмника» показывает только MSP). Официальный
+  build.betaflight.com авто-дополняет набор (проверено эхом `POST /api/builds`):
+  `USE_SERIALRX_* → USE_SERIALRX`; `USE_TELEMETRY_* → USE_TELEMETRY`;
+  `USE_RX_PPM → USE_PPM`; `USE_GPS → USE_ALTITUDE_HOLD + USE_GPS_PLUS_CODES +
+  USE_POSITION_HOLD`; OSD-протоколы → `USE_OSD`. Скрипт воспроизводит это в
+  нормализации `OPT_LIST` (строки `# авто: +...` в выводе).
 - Радио-протоколы с `includesTelemetry: true` автоматически добавляют
   `USE_TELEMETRY` + конкретный `USE_TELEMETRY_*` (CRSF→CRSF, FPORT→SMARTPORT,
   GHOST→GHST, JETIEXBUS→JETIEXBUS).
@@ -91,8 +100,13 @@ dist/              # готовые .hex
 - Проверять «попала ли фича в прошивку» через `nm` по `.o` нельзя (LTO) —
   смотреть символы в `*.map` (например `sdcardSdio_isFunctional`). Для
   статических функций (например `crsfRxInit`) символа в map может не быть —
-  LTO их интернирует/встраивает; смотреть `LOAD .../<file>.o` и глобальные
-  символы (`serialRx*`, `rxInit`).
+  LTO их интернирует/встраивает; смотреть **другие** символы фичи (для CRSF RX
+  — `crsfDataReceive`, `crsfChannelData`; в `nm` финального `.elf`). Строки
+  `LOAD .../<file>.o` в map — НЕ доказательство: файл, целиком выключенный
+  `#ifdef`, тоже даёт LOAD-строку пустого объекта. `serialRxBytesWaiting` —
+  общая функция `io/serial.c`, она есть всегда и про протоколы RX ничего не
+  говорит. Тулчейн (`arm-none-eabi-nm/objdump`) — в docker-образе,
+  `/opt/betaflight/tools/.../bin`, в PATH его нет.
 - `USE_RX_MSP`/`USE_RX_MSP_OVERRIDE` определяются в `common_pre.h:366` вне
   гейта `CLOUD_BUILD` — MSP-RX (каналы по MSP от HDZero/Walksnail и т.п.)
   есть в любой сборке; отдельным флагом не включается. Блок дефолтов
