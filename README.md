@@ -211,15 +211,30 @@
 с `-f VTX`: при `USE_VTX` драйверы `USE_VTX_COMMON/CONTROL/SMARTAUDIO/TRAMP/MSP`
 подключаются автоматически (`common_pre.h:337`, вне гейта `CLOUD_BUILD`).
 
-### ELRS
+### ELRS / управляющие каналы приёмника (RX)
 
-Флагов вида `USE_ELRSV4` в Betaflight 2026.6.2 нет. Внешний приёмник ELRS
-(любой версии, включая 4.x) работает через CRSF — `--radio CRSF`; современный
-вариант протокола `USE_CRSF_V3` включается автоматически, дополнительных
-опций не требуется. Флаг `USE_RX_EXPRESSLRS` существует только для плат со
-встроенным SPI-модулем ELRS и требует дополнительные пины
-(`RX_EXPRESSLRS_SPI_RESET_PIN`, `RX_EXPRESSLRS_SPI_BUSY_PIN`, `RX_SPI_CS`, ...)
-в конфиге платы — в MicoAir743V2 встроенного приёмника нет.
+Флагов вида `USE_ELRSV4` в Betaflight 2026.6.2 нет — ни в build API, ни в
+исходниках. Внешний ELRS-приёмник (любой версии, включая 4.x), подключённый
+к UART, — это протокол CRSF: `--radio CRSF` уже добавляет всё необходимое
+(`USE_SERIALRX_CRSF`, телеметрию и `USE_CRSF_V3` автоматически,
+`common_pre.h:443`). Проверить в прошивке: `LOAD .../rx/crsf.o`,
+`.../telemetry/crsf.o`, символы `serialRx*`/`rxInit` в map (статический
+`crsfRxInit` LTO встраивает в `rxInit`, отдельным символом он не виден).
+
+В «Портах» на UART приёмника должна стоять функция **Serial RX** (TX
+приёмника → RX платы), во вкладке «Приёмник» протокол — **CRSF**; фича
+`RX_SERIAL` включена по умолчанию (`DEFAULT_RX_FEATURE`, `feature.h:31`).
+
+Если каналы передаются по MSP (например приёмник цифровой видеосистемы
+HDZero/Walksnail), используется `USE_RX_MSP` + `USE_RX_MSP_OVERRIDE` — они
+определяются в `common_pre.h:366` **вне гейта `CLOUD_BUILD`**, т.е. присутствуют
+в прошивке всегда; дополнительно ничего собирать не нужно. В CLI —
+`feature RX_MSP`.
+
+Флаг `USE_RX_EXPRESSLRS` существует только для плат со встроенным SPI-модулем
+ELRS и требует дополнительные пины (`RX_EXPRESSLRS_SPI_RESET_PIN`,
+`RX_EXPRESSLRS_SPI_BUSY_PIN`, `RX_SPI_CS`, ...) в конфиге платы — в
+MicoAir743V2 встроенного приёмника нет.
 
 ## Проверенные сборки (Betaflight 2026.6.2)
 
