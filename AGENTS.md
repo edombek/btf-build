@@ -27,12 +27,16 @@ dist/              # готовые .hex
 
 1. `ensure_sources` — `git clone --depth 1 --branch <BF_VERSION>` либо
    `fetch`+`checkout` существующего клона. Дефолт версии — `2026.6.2`.
-2. `ensure_submodules` — инициализация submodule'ов `src/config` (конфиги плат)
-   и `lib/modules/dronecan/libcanard` **последовательно на хосте**.
+2. `ensure_submodules` — инициализация **всех** submodule'ов репо
+   (`git submodule update --init --recursive`) **последовательно на хосте**.
    ⚠️ Не переносите это в `make -j` внутри контейнера: параллельные
    `git submodule update --init` конфликтуют на lock-файле `.git/config`
    (`could not lock config file .git/config: File exists`), из-за чего сборка
-   падает на чистом клоне.
+   падает на чистом клоне. В `.gitmodules` 10 записей, но 8 платформенных SDK
+   (esp-idf, pico-sdk, STM32H5/N6/C5, GD32H7, X32M7, APM32F4) помечены
+   `update = none` и git их намеренно пропускает («Пропуск подмодуля …» в логе —
+   это норма); реально инициализируются `src/config` (конфиги плат) и
+   `libcanard` (+ вложенный `avr-can-lib`).
 3. Выбор режима цели (`set -e` не должен ронять скрипт на пустых проверках —
    используйте `if`, а не `cmd && action` верхнего уровня):
    - `-t/--target <ИМЯ>` → `make TARGET=<ИМЯ>` — базовый MCU-таргет;
@@ -125,6 +129,7 @@ bash -n build_generic.sh                     # синтаксис
 ./build_generic.sh --list-targets | head     # базовые таргеты
 ./build_generic.sh MICOAIR743V2EXTMAG        # негативный кейс: подсказки похожих имён
 ./build_generic.sh MICOAIR743V2 --radio CRSF --feat "Foo Bar"   # негативный кейс опции
+./build_generic.sh -t STM32H743 --radio CRSF,MAVLINK --preview  # список радио + показ команды
 ```
 
 Полная проверка (несколько минут, нужен docker и сеть):

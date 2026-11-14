@@ -42,13 +42,14 @@ cat <<'EOF'
 Параметры:
   -b, --bf-version <ВЕР>   версия Betaflight: тег/ветка (дефолт: 2026.6.2)
   -i, --image <ОБРАЗ>      docker-образ тулчейна (дефолт: betaflight/betaflight-build:arm)
-  --radio <ПРОТОКОЛ>       CRSF | FPORT | GHOST | IBUS | JETIEXBUS | MAVLINK | PPM |
-                           SBUS | SPEKTRUM | SRXL2 | SUMD | SUMH | XBUS
-  --telemetry <ПРОТОКОЛ>   FRSKY_HUB | HOTT | IBUS_EXTENDED | LTM | MAVLINK |
-                           SMARTPORT | SRXL | none
+  --radio <СПИСОК>         CRSF | FPORT | GHOST | IBUS | JETIEXBUS | MAVLINK | PPM |
+                           SBUS | SPEKTRUM | SRXL2 | SUMD | SUMH | XBUS;
+                           можно несколько через запятую: --radio CRSF,MAVLINK
+  --telemetry <СПИСОК>     FRSKY_HUB | HOTT | IBUS_EXTENDED | LTM | MAVLINK |
+                           SMARTPORT | SRXL | none (списком, как --radio)
                            (CRSF/GHOST/FPORT/JETIEXBUS включают телеметрию сами)
-  --osd <ТИП>              Analog | Digital | FrSky | none
-  --motor <ПРОТОКОЛ>       BRUSHED | DSHOT | MULTISHOT | ONESHOT | PROSHOT | PWM
+  --osd <СПИСОК>           Analog | Digital | FrSky | none (можно несколько)
+  --motor <СПИСОК>         BRUSHED | DSHOT | MULTISHOT | ONESHOT | PROSHOT | PWM
   -f, --feat <СПИСОК>      доп. опции (через запятую или параметром повторно), имена
                            как в UI мастера: "Altitude Hold", "Batt. Continue",
                            "Dashboard", "LED Strip", "Pin IO", "Chirp", GPS, VTX...
@@ -57,6 +58,7 @@ cat <<'EOF'
                            напр. USE_EMFAT_TOOLS, USE_USB_CDC_HID
   --plain                  не добавлять CLOUD_BUILD: выбранные опции накладываются
                            поверх «всех по умолчанию» (plain-режим make)
+  --preview, --dry-run     показать команду docker/make вместо запуска сборки
   --list-options           полный список всех опций выбранной версии BF (из API)
   --list-configs           список стандартных конфигов плат
   --list-targets           список базовых MCU-таргетов
@@ -75,15 +77,17 @@ cat <<'EOF'
   # базовый таргет STM32H743 (все фичи по умолчанию, без конфига платы)
   ./build_generic.sh -t STM32H743
 
+  # несколько радио-протоколов в одной прошивке + показ команды вместо сборки
+  ./build_generic.sh -t STM32H743 --radio CRSF,MAVLINK --motor DSHOT --preview
+
 Результат: dist/betaflight_<версия>_<цель>.hex (elf/map — в betaflight/obj/)
 EOF
 }
 
 # ------------------------------ разбор аргументов -----------------------------
-declare -a FEATS=() DEFINES=()
+declare -a FEATS=() DEFINES=() RADIOS=() TELEMETRIES=() OSDS=() MOTORS=()
 CONFIG_SRC="" NAME_ARG="" TARGET_ARG=""
-RADIO="" TELEMETRY="" OSD="" MOTOR=""
-TARGET_MODE=0 PLAIN=0 LIST_OPTS=0 LIST_CFG=0 LIST_TGT=0
+TARGET_MODE=0 PLAIN=0 PREVIEW=0 LIST_OPTS=0 LIST_CFG=0 LIST_TGT=0
 
 while (($#)); do
     case "$1" in
@@ -94,11 +98,12 @@ while (($#)); do
         -t|--target)     TARGET_ARG="$2"; shift 2;;
         -f|--feat)       IFS=',' read -ra _p <<<"$2"; FEATS+=("${_p[@]}"); shift 2;;
         -D|--define)     DEFINES+=("$2"); shift 2;;
-        --radio)         RADIO="$2"; shift 2;;
-        --telemetry)     TELEMETRY="$2"; shift 2;;
-        --osd)           OSD="$2"; shift 2;;
-        --motor)         MOTOR="$2"; shift 2;;
+        --radio)         IFS=',' read -ra _p <<<"$2"; RADIOS+=("${_p[@]}"); shift 2;;
+        --telemetry)     IFS=',' read -ra _p <<<"$2"; TELEMETRIES+=("${_p[@]}"); shift 2;;
+        --osd)           IFS=',' read -ra _p <<<"$2"; OSDS+=("${_p[@]}"); shift 2;;
+        --motor)         IFS=',' read -ra _p <<<"$2"; MOTORS+=("${_p[@]}"); shift 2;;
         --plain)         PLAIN=1; shift;;
+        --preview|--dry-run) PREVIEW=1; shift;;
         --list-options)  LIST_OPTS=1; shift;;
         --list-configs)  LIST_CFG=1; shift;;
         --list-targets)  LIST_TGT=1; shift;;
@@ -133,8 +138,9 @@ ensure_sources() {
 }
 
 ensure_submodules() {
-    # последовательно: параллельные git submodule update конфликтуют на .git/config
-    git -C betaflight submodule update --init -- src/config lib/modules/dronecan/libcanard
+    # все submodule'ы репо, последовательно на хосте: параллельные
+    # git submodule update конфликтуют на lock-файле .git/config
+    git -C betaflight submodule update --init --recursive
 }
 
 base_targets() {
@@ -257,12 +263,11 @@ fi
 
 # ------------------------- опции -> defines (через API) -----------------------
 declare -a MAP_SEL=()
-if [ -n "$RADIO" ]; then MAP_SEL+=("radio	$RADIO"); fi
-if [ -n "$TELEMETRY" ]; then MAP_SEL+=("telemetry	$TELEMETRY"); fi
-if [ -n "$OSD" ]; then MAP_SEL+=("osd	$OSD"); fi
-if [ -n "$MOTOR" ]; then MAP_SEL+=("motor	$MOTOR"); fi
+for r in "${RADIOS[@]+"${RADIOS[@]}"}"; do MAP_SEL+=("radio	$r"); done
+for t in "${TELEMETRIES[@]+"${TELEMETRIES[@]}"}"; do MAP_SEL+=("telemetry	$t"); done
+for o in "${OSDS[@]+"${OSDS[@]}"}"; do MAP_SEL+=("osd	$o"); done
+for m in "${MOTORS[@]+"${MOTORS[@]}"}"; do MAP_SEL+=("motor	$m"); done
 for f in "${FEATS[@]+"${FEATS[@]}"}"; do MAP_SEL+=("general	$f"); done
-# не роняем скрипт из-за set -e, если последний [ -n ] был пустым
 HAVE_OPTS=0
 if ((${#MAP_SEL[@]} || ${#DEFINES[@]})); then HAVE_OPTS=1; fi
 
@@ -396,6 +401,21 @@ MAKE_ARGS+=("${MAKE_VARIANT[@]}" hex)
 
 echo "==> Цель: ${MAKE_VARIANT[*]}"
 if [ -n "$OPTIONS" ]; then echo "==> Опции: $OPTIONS"; fi
+
+DOCKER_CMD=(docker "${DOCKER_ARGS[@]}" "$IMAGE" make "${MAKE_ARGS[@]}")
+if ((PREVIEW)); then
+    echo "==> Команда сборки (preview, ничего не запускается):"
+    _q=""
+    for _a in "${DOCKER_CMD[@]}"; do
+        case "$_a" in
+            *[[:space:]]*) _q+=" \"$_a\"";;
+            *)             _q+=" $_a";;
+        esac
+    done
+    echo "${_q# }"
+    exit 0
+fi
+
 STAMP="$(mktemp)"
 trap 'rm -f "$STAMP"' EXIT
 docker "${DOCKER_ARGS[@]}" "$IMAGE" make "${MAKE_ARGS[@]}"

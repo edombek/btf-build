@@ -29,8 +29,11 @@
 ## Как это работает
 
 1. Клонируется/обновляется `betaflight` на нужный тег (`-b`, по умолчанию `2026.6.2`);
-   submodule'ы (`src/config` с конфигами плат, `libcanard`) инициализируются на хосте
-   последовательно (параллельная инициализация внутри `make -j` конфликтует на lock-файле git).
+   submodule'ы инициализируются на хосте все, объявленные в репо
+   (`git submodule update --init --recursive`; параллельная инициализация внутри
+   `make -j` конфликтует на lock-файле git). Платформенные SDK, помеченные в
+   `.gitmodules` как `update = none` (esp-idf, pico-sdk, STM32H5/N6/C5, GD32H7,
+   X32M7, APM32F4), git пропускает — так задумано upstream.
 2. Для кастомного конфига `config.h` скачивается/копируется в
    `.build/configs/configs/<ИМЯ>/config.h` и передаётся в сборку через
    `BETAFLIGHT_CONFIG` (в 2026.x конфиги плат живут в отдельном репо
@@ -57,9 +60,9 @@
 
 | Параметр | Значения |
 |---|---|
-| `--radio` | CRSF, FPORT, GHOST, IBUS, JETIEXBUS, MAVLINK, PPM, SBUS, SPEKTRUM, SRXL2, SUMD, SUMH, XBUS |
-| `--telemetry` | FRSKY_HUB, HOTT, IBUS_EXTENDED, LTM, MAVLINK, SMARTPORT, SRXL, none (CRSF/GHOST/FPORT/JETIEXBUS включают телеметрию автоматически) |
-| `--osd` | Analog, Digital, FrSky, none |
+| `--radio` | CRSF, FPORT, GHOST, IBUS, JETIEXBUS, MAVLINK, PPM, SBUS, SPEKTRUM, SRXL2, SUMD, SUMH, XBUS — можно несколько через запятую (`--radio CRSF,MAVLINK`) |
+| `--telemetry` | FRSKY_HUB, HOTT, IBUS_EXTENDED, LTM, MAVLINK, SMARTPORT, SRXL, none (также списком; CRSF/GHOST/FPORT/JETIEXBUS включают телеметрию автоматически) |
+| `--osd` | Analog, Digital, FrSky, none (можно несколько) |
 | `--motor` | BRUSHED, DSHOT, MULTISHOT, ONESHOT, PROSHOT, PWM |
 | `-f, --feat` | остальные опции именами из UI, через запятую или параметром повторно |
 | `-D, --define` | произвольный define мимо API (например `USE_EMFAT_TOOLS`) |
@@ -85,6 +88,7 @@ OSD → `USE_OSD`) — без них часть опций не попадает
 | `-b, --bf-version` | тег/ветка Betaflight (дефолт `2026.6.2`) |
 | `-i, --image` | docker-образ тулчейна (дефолт `betaflight/betaflight-build:arm`; если нужен образ конкретной ветки — собрать самому: `git clone https://github.com/betaflight/betaflight-build && cd betaflight-build && ./build-image.sh -r 2026.6.2 arm`) |
 | `-n, --name` | имя кастомного конфига (по умолчанию из имени каталога/URL `config.h`) |
+| `--preview`, `--dry-run` | показать полную команду `docker … make …` вместо запуска сборки (проверка цели и опций) |
 
 **Radio Protocol**
 
