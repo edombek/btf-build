@@ -1,0 +1,17 @@
+# рабочие каталоги скрипта — не часть репозитория
+betaflight/
+dist/
+.build/
+custom_configs/
+
+# артефакты сборки
+*.hex
+*.uf2
+*.bin
+*.elf
+*.map
+*.o
+*.d
+
+# дампы CLI из Configurator
+*cli_backup*
