@@ -1,5 +1,7 @@
 # Сборка прошивок Betaflight (2026.6.2) для MicoAir743V2 и других плат
 
+[Русский](README.md) | [English](README.en.md)
+
 Скрипт собирает прошивки Betaflight в официальном docker-образе тулчейна
 [`betaflight/betaflight-build`](https://hub.docker.com/r/betaflight/betaflight-build)
 (внутри — ровно `arm-none-eabi-gcc 13.3.1`, требуемый системой сборки Betaflight 2026.6.2).
@@ -66,6 +68,7 @@
 | `--motor` | BRUSHED, DSHOT, MULTISHOT, ONESHOT, PROSHOT, PWM |
 | `-f, --feat` | остальные опции именами из UI, через запятую или параметром повторно |
 | `-D, --define` | произвольный define мимо API (например `USE_EMFAT_TOOLS`) |
+| `-v, --verbose` | печатать расшифровку опций: `# имя -> DEFINE`, `# auto: +DEFINE` (по умолчанию молчит) |
 | `--plain` | не добавлять `CLOUD_BUILD`: опции накладываются поверх «всех по умолчанию» |
 | `--list-options` | все опции выбранной версии BF живьём из API |
 
@@ -170,6 +173,27 @@ OSD → `USE_OSD`) — без них часть опций не попадает
 `USE_RANGEFINDER`, `USE_OPTICALFLOW`, `USE_SOFTSERIAL`, `USE_DSHOT_BITBANG` и т.д.
 (см. `src/main/target/common_pre.h` / `common_post.h`).
 
+## Кто какие флаги добавляет
+
+Defines в команду `make OPTIONS=...` приходят из нескольких мест; заголовки
+Betaflight затем сами доопределяют и «вычищают» лишнее:
+
+| Источник | Когда | Что добавляет |
+|---|---|---|
+| Configurator (мастер прошивки) | облачная сборка | только выбранные значения (`USE_SERIALRX_CRSF`, …) + `CLOUD_BUILD` (или `CORE_BUILD`); никаких зонтиков и телеметрий — `src/composables/useCloudBuild.ts` |
+| сервер build.betaflight.com | `POST /api/builds` | `USE_SERIALRX_* → USE_SERIALRX`; `USE_TELEMETRY_* → USE_TELEMETRY`; `USE_RX_PPM → USE_PPM`; `USE_GPS → USE_ALTITUDE_HOLD + USE_GPS_PLUS_CODES + USE_POSITION_HOLD` (проверено по эху запроса) |
+| `build_generic.sh` | всегда | `CLOUD_BUILD` (если не `--plain`); defines из API по вашим `--radio/--telemetry/--osd/--motor/-f`; те же авто-дополнения, что и сервер, + `USE_OSD` для OSD-протоколов + `USE_TELEMETRY + USE_TELEMETRY_MAVLINK` для `USE_SERIALRX_MAVLINK` |
+| Makefile Betaflight | при сборке | `OPTIONS="X Y"` → глобальные `-DX -DY` (`Makefile:375`, `mk/preprocess.mk:16`); `CORE_BUILD` — минимальный набор фич |
+| `common_pre.h` | при компиляции | без `CLOUD_BUILD` — дефолты всех фич (блок `:72–282`); вне зависимости от режима: `USE_RX_MSP/USE_RX_MSP_OVERRIDE/USE_RX_RSSI_DBM/USE_RX_RSNR/USE_RX_LINK_UPLINK_POWER` (`:408–412`); цепочки: `USE_VTX → USE_VTX_COMMON/CONTROL/SMARTAUDIO/TRAMP/MSP/TABLE` (`:337`), `USE_SERIALRX_CRSF → USE_CRSF_V3` (+CMS-телеметрия/линк-статистика при CRSF-телеметрии, `:481`), `USE_SERIALRX_MAVLINK → USE_TELEMETRY_MAVLINK` (`:494`), `USE_TELEMETRY_SRXL → USE_SERIALRX_SPEKTRUM + управление VTX Spektrum` (`:395` for USE_TELEMETRY_SRXL), `USE_GPS+USE_OSD → USE_CMS_GPS_RESCUE_MENU` |
+| `common_post.h` | «уборка» | сиротливые defines удаляются: без `USE_SERIALRX` — все `USE_SERIALRX_*` (`:340`), без `USE_TELEMETRY` — все `USE_TELEMETRY_*` (`:355`), без `USE_SERIALRX_CRSF` — `USE_TELEMETRY_CRSF/USE_CRSF_V3` (`:393`); FPORT/IBUS_EXTENDED/JETIEXBUS, напротив, сами возвращают себе `USE_TELEMETRY + USE_TELEMETRY_*` (`:368–392`) |
+| платформенный `src/platform/*/target/*/target.h` | на каждый MCU | драйверы MCU: STM32H743 — `USE_I2C/USE_SPI/USE_ADC/USE_BEEPER/USE_ESCSERIAL…`, а `USE_SDCARD → USE_SDCARD_SPI + USE_SDCARD_SDIO + ENABLE_SDIO_INIT` (`:71–81`) |
+| `config.h` платы (betaflight/config или кастомный) | на каждую плату | `USE_SDCARD`, пины SDIO/UART/I2C, `DEFAULT_BLACKBOX_DEVICE`, `VTX_DATA_PIN`, пины SPI-ELRS и т.п. |
+
+Практические следствия: `-D` из `OPTIONS` не должен дублировать то, что уже
+определяет `target.h` (будет `-Werror: redefined`); «пропавшая» фича чаще всего
+означает отсутствие зонтика (`USE_SERIALRX`/`USE_TELEMETRY`) — `common_post.h`
+её вычистил.
+
 ## Опции прошивки MICOAIR743V2_EXTMAG (скриншот)
 
 | Параметр в UI | Define |
@@ -227,7 +251,7 @@ OSD → `USE_OSD`) — без них часть опций не попадает
 к UART, — это протокол CRSF: `--radio CRSF`.
 
 **Важный нюанс `CLOUD_BUILD`:** одного `USE_SERIALRX_CRSF` недостаточно —
-нужен ещё «зонтичный» define `USE_SERIALRX`, иначе `common_post.h:261`
+нужен ещё «зонтичный» define `USE_SERIALRX`, иначе `common_post.h:340`
 отключает все `USE_SERIALRX_*` протоколы и в прошивке не оказывается никакого
 UART-приёмника (во вкладке «Режим приёмника» доступен только MSP). Официальный
 build.betaflight.com добавляет такие авто-defines сам (проверено по эху
@@ -237,12 +261,19 @@ build.betaflight.com добавляет такие авто-defines сам (пр
 |---|---|
 | любой `USE_SERIALRX_*` (CRSF, SBUS, FPORT, SRXL2, ...) | `USE_SERIALRX` |
 | любой `USE_TELEMETRY_*` | `USE_TELEMETRY` |
+| `USE_SERIALRX_MAVLINK` | `USE_SERIALRX + USE_TELEMETRY + USE_TELEMETRY_MAVLINK` |
 | `USE_RX_PPM` | `USE_PPM` |
 | `USE_GPS` | `USE_ALTITUDE_HOLD`, `USE_GPS_PLUS_CODES`, `USE_POSITION_HOLD` |
 | OSD `USE_OSD_SD/HD` / `USE_FRSKYOSD` | `USE_OSD` |
 
-(добавки видны в выводе как `# авто: +USE_SERIALRX`; `USE_CRSF_V3` включает
-сам Makefile — `common_pre.h:443`). Пропроверить UART-RX в готовой прошивке:
+(добавки видны с `-v` в выводе как `# auto: +USE_SERIALRX`; `USE_CRSF_V3` включает
+сам Makefile — `common_pre.h:481`). Для радио **MAVLINK** скрипт добавляет
+`USE_TELEMETRY + USE_TELEMETRY_MAVLINK` чуть больше официального сервера: по
+исходникам «SERIALRX_MAVLINK provider can not work without TELEMETRY_MAVLINK»
+(`common_pre.h:494` авто-определяет его), но без «зонтика» `USE_TELEMETRY`
+`common_post.h:354` этот define стирает — поэтому скрипт передаёт оба явно
+(в облачной сборке тот же результат даёт авто-define из `common_pre.h`, если
+телеметрия уже включена другим протоколом). Пропроверить UART-RX в готовой прошивке:
 `arm-none-eabi-nm obj/main/*.elf | grep -i crsf` — должны быть `crsfDataReceive`,
 `crsfChannelData` и т.п. Прошивки, собранные до добавления этого правила,
 CRSF-приёмник не содержали — перешейте заново.
@@ -253,7 +284,7 @@ CRSF-приёмник не содержали — перешейте занов�
 
 Если каналы передаются по MSP (например приёмник цифровой видеосистемы
 HDZero/Walksnail), используется `USE_RX_MSP` + `USE_RX_MSP_OVERRIDE` — они
-определяются в `common_pre.h:366` **вне гейта `CLOUD_BUILD`**, т.е. присутствуют
+определяются в `common_pre.h:408` **вне гейта `CLOUD_BUILD`**, т.е. присутствуют
 в прошивке всегда; дополнительно ничего собирать не нужно. В CLI —
 `feature RX_MSP`.
 

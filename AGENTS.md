@@ -1,183 +1,212 @@
 # AGENTS.md — guidance for automated agents working in this repo
 
-## Что это за репозиторий
+## What this repository is
 
-Репозиторий содержит **один скрипт сборки** (`build_generic.sh`) прошивок
-[Betaflight](https://github.com/betaflight/betaflight) и документацию к нему
-(`README.md`). Это **не** исходники Betaflight: дерево Betaflight клонируется
-скриптом в `betaflight/` во время работы и не хранится в git.
+This repository contains **one build script** (`build_generic.sh`) for
+[Betaflight](https://github.com/betaflight/betaflight) firmware and its
+documentation (`README.md` in Russian, `README.en.md` in English). These are
+**not** Betaflight sources: the Betaflight tree is cloned by the script into
+`betaflight/` at run time and is not kept in git.
 
-Цель проекта — воспроизводимая сборка прошивок Betaflight без ручной установки
-тулчейна: компиляция выполняется внутри официального docker-образа
-`betaflight/betaflight-build`.
+The goal of the project is reproducible Betaflight firmware builds without any
+manually installed toolchain: compilation happens inside the official docker
+image `betaflight/betaflight-build`.
 
-## Структура
+## Layout
 
 ```
-build_generic.sh   # единственный исполняемый скрипт — вся логика сборки
-README.md          # инструкция для пользователя + полная таблица опций
-AGENTS.md          # этот файл
-# создаются во время работы и НЕ коммитятся (см. .gitignore):
-betaflight/        # клон Betaflight (тег/ветка из -b)
-.build/            # кэш API-опций + staging для кастомных config.h
-dist/              # готовые .hex
+build_generic.sh   # the only executable script — all build logic
+README.md          # user docs (Russian) + full option tables
+README.en.md       # user docs (English), cross-linked with README.md
+AGENTS.md          # this file (English only)
+# created at run time and NOT committed (see .gitignore):
+betaflight/        # Betaflight clone (tag/branch from -b)
+.build/            # build API options cache + custom config.h staging
+dist/              # finished .hex files
 ```
 
-## Как работает сборка (ключевые детали)
+## How the build works (key details)
 
-1. `ensure_sources` — `git clone --depth 1 --branch <BF_VERSION>` либо
-   `fetch`+`checkout` существующего клона. Дефолт версии — `2026.6.2`.
-2. `ensure_submodules` — инициализация **всех** submodule'ов репо
-   (`git submodule update --init --recursive`) **последовательно на хосте**.
-   ⚠️ Не переносите это в `make -j` внутри контейнера: параллельные
-   `git submodule update --init` конфликтуют на lock-файле `.git/config`
-   (`could not lock config file .git/config: File exists`), из-за чего сборка
-   падает на чистом клоне. В `.gitmodules` 10 записей, но 8 платформенных SDK
-   (esp-idf, pico-sdk, STM32H5/N6/C5, GD32H7, X32M7, APM32F4) помечены
-   `update = none` и git их намеренно пропускает («Пропуск подмодуля …» в логе —
-   это норма); реально инициализируются `src/config` (конфиги плат) и
-   `libcanard` (+ вложенный `avr-can-lib`).
-3. Выбор режима цели (`set -e` не должен ронять скрипт на пустых проверках —
-   используйте `if`, а не `cmd && action` верхнего уровня):
-   - `-t/--target <ИМЯ>` → `make TARGET=<ИМЯ>` — базовый MCU-таргет;
-     имена берутся из `src/platform/*/target/*/target.mk` (`base_targets`);
-   - `-c/--config <файл|URL|каталог>` → кастомный конфиг: `config.h` кладётся в
-     `.build/configs/configs/<ИМЯ>/config.h`, каталог монтируется в контейнер как
-     `/configs`, передаётся `-e BETAFLIGHT_CONFIG=/configs`. Имя конфига — из
-     `-n`, иначе из имени каталога вокруг `config.h` / из URL. MCU выводится из
-     `FC_TARGET_MCU` внутри `config.h` (это делает сам Makefile Betaflight);
-   - иначе — стандартный конфиг из submodule `src/config`
-     (`configs/<ИМЯ>/config.h` или `configs/<ПРОИЗВОДИТЕЛЬ>/<ИМЯ>/config.h`).
-4. Опции мастер-сборки конвертируются в defines Make через python-блок, читающий
-   JSON из `fetch_options` (`build.betaflight.com/api/options/<версия>`) —
-   результат: `make [OPTIONS="..."] hex`.
+1. `ensure_sources` — `git clone --depth 1 --branch <BF_VERSION>`, or
+   `fetch` + `checkout` for an existing clone. Default version: `2026.6.2`.
+2. `ensure_submodules` — initializes **all** repo submodules
+   (`git submodule update --init --recursive`) **sequentially on the host**.
+   ⚠️ Do not move this into `make -j` inside the container: concurrent
+   `git submodule update --init` calls race on the `.git/config` lock file
+   (`could not lock config file .git/config: File exists`), which makes the
+   build fail on a fresh clone. `.gitmodules` has 10 entries, but 8 platform
+   SDKs (esp-idf, pico-sdk, STM32H5/N6/C5, GD32H7, X32M7, APM32F4) are marked
+   `update = none` and git deliberately skips them ("Skipping sub-module …"
+   in the log is normal); what actually initializes is `src/config` (board
+   configs) and `libcanard` (+ nested `avr-can-lib`).
+3. Target mode selection (`set -e` must not kill the script on empty checks —
+   use `if`, never top-level `cmd && action`):
+   - `-t/--target <NAME>` → `make TARGET=<NAME>` — base MCU target; names come
+     from `src/platform/*/target/*/target.mk` (`base_targets`);
+   - `-c/--config <file|URL|dir>` → custom config: `config.h` is placed into
+     `.build/configs/configs/<NAME>/config.h`, the directory is mounted into
+     the container as `/configs` and passed via `-e BETAFLIGHT_CONFIG=/configs`.
+     Config name comes from `-n`, otherwise from the directory wrapping
+     `config.h` / from the URL. The MCU is derived from `FC_TARGET_MCU` inside
+     `config.h` (the Betaflight Makefile does this);
+   - otherwise — standard config from the `src/config` submodule
+     (`configs/<NAME>/config.h` or `configs/<MANUFACTURER>/<NAME>/config.h`).
+4. Firmware-master options are converted into make defines by the python block
+   reading the JSON from `fetch_options` (`build.betaflight.com/api/options/<version>`)
+   — result: `make [OPTIONS="..."] hex`.
 
-### Обязательные семантические правила опций
+### Mandatory option semantics
 
-- При задании любой опции добавляется `CLOUD_BUILD` (как в облачной сборке
-  Betaflight) — иначе `common_pre.h` включает **все** фичи по умолчанию, и
-  прошивка получается другой. Флаг `--plain` отключает `CLOUD_BUILD`.
-- **Зонтичные defines:** `CLOUD_BUILD`-сборка обязана передавать `USE_SERIALRX`
-  при любом `USE_SERIALRX_*` протоколе — иначе `common_post.h:261` делает
-  `#undef` всех протоколов serial RX, и в прошивке нет UART-приёмника
-  (в Configurator «Режим приёмника» показывает только MSP). Официальный
-  build.betaflight.com авто-дополняет набор (проверено эхом `POST /api/builds`):
+- Whenever any option is given, `CLOUD_BUILD` is prepended (same as Betaflight
+  cloud builds) — otherwise `common_pre.h` enables **all** features by default
+  and the firmware is different. `--plain` disables `CLOUD_BUILD`.
+- **Umbrella defines:** a `CLOUD_BUILD` build must pass `USE_SERIALRX` for any
+  `USE_SERIALRX_*` protocol — otherwise `common_post.h:340` `#undef`s every
+  serial RX protocol and the firmware has no UART receiver (the Configurator
+  "Receiver mode" tab then offers MSP only). The official build.betaflight.com
+  server auto-completes the set (verified via `POST /api/builds` echo):
   `USE_SERIALRX_* → USE_SERIALRX`; `USE_TELEMETRY_* → USE_TELEMETRY`;
   `USE_RX_PPM → USE_PPM`; `USE_GPS → USE_ALTITUDE_HOLD + USE_GPS_PLUS_CODES +
-  USE_POSITION_HOLD`; OSD-протоколы → `USE_OSD`. Скрипт воспроизводит это в
-  нормализации `OPT_LIST` (строки `# авто: +...` в выводе).
-- Радио-протоколы с `includesTelemetry: true` автоматически добавляют
-  `USE_TELEMETRY` + конкретный `USE_TELEMETRY_*` (CRSF→CRSF, FPORT→SMARTPORT,
+  USE_POSITION_HOLD`; OSD protocols → `USE_OSD`. The script reproduces this in
+  the `OPT_LIST` normalization (`# auto: +...` lines, printed with `-v`).
+  The script additionally sends `USE_TELEMETRY + USE_TELEMETRY_MAVLINK` for
+  `USE_SERIALRX_MAVLINK` (the build server does not): per sources
+  "SERIALRX_MAVLINK provider can not work without TELEMETRY_MAVLINK"
+  (`common_pre.h:494` auto-defines it), but `common_post.h:354` sweeps it out
+  when the `USE_TELEMETRY` umbrella is absent. Keep the `USE_SERIALRX_MAVLINK`
+  case branch **before** the generic `USE_SERIALRX_*` one in the expansion
+  loop, and remember it must add `USE_SERIALRX` as well.
+- Radio protocols with `includesTelemetry: true` automatically add
+  `USE_TELEMETRY` + the concrete `USE_TELEMETRY_*` (CRSF→CRSF, FPORT→SMARTPORT,
   GHOST→GHST, JETIEXBUS→JETIEXBUS).
-- OSD-опции (`USE_OSD_SD` / `USE_OSD_HD` / `USE_FRSKYOSD`) должны тянуть
-  `USE_OSD` в явном виде.
-- Полные имена опций, define'ы и флаги `default`/`includesTelemetry` берутся
-  **только** из ответа build API — не заводите собственный список «магических»
-  имён; при расхождении выигрывает API.
-- OSD `Digital` исключает аналоговый чип `MAX7456` — это поведение Makefile
-  Betaflight, не дублировать в скрипте.
-- Старые версии Betaflight (до 2025.12) не имеют API опций: `fetch_options`
-  завершается с подсказкой использовать `-D USE_XXX`.
+- OSD options (`USE_OSD_SD` / `USE_OSD_HD` / `USE_FRSKYOSD`) must pull
+  `USE_OSD` explicitly.
+- Full option names, defines and the `default`/`includesTelemetry` flags come
+  **only** from the build API response — never keep a private list of "magic"
+  names; when they differ, the API wins.
+- OSD `Digital` excludes the analog `MAX7456` chip — that is Betaflight Makefile
+  behavior, do not duplicate it in the script.
+- Old Betaflight versions (before 2025.12) have no options API: `fetch_options`
+  exits with a hint to use `-D USE_XXX`.
+- `--radio/--telemetry/--osd/--motor` accept comma-separated lists (they fill
+  `RADIOS/TELEMETRIES/OSDS/MOTORS` arrays; each element becomes a separate
+  `MAP_SEL` token, dedup happens in the python block).
 
-### Важные факты об окружении сборки
+### Important facts about the build environment
 
-- Betaflight 2026.6.2 требует **ровно** `arm-none-eabi-gcc 13.3.1`
-  (`GCC_REQUIRED_VERSION` в `mk/tools.mk`). Системный компилятор не подходит;
-  тулчейн — внутри docker-образа (`TOOLS_DIR=/opt/betaflight/tools`).
-  Не пытайтесь добавить проверку/установку тулчейна на хост.
-- Контейнер запускается с `-u "$(id -u):$(id -g)"`, чтобы артефакты в `betaflight/obj`
-  принадлежали пользователю. В образе уже настроен `safe.directory`.
-- `-c` принимает и готовые каталоги-корни с layout `configs/...` (например
-  пользовательский `BETAFLIGHT_CONFIG`) — не ломайте этот сценарий.
-- Кастомные конфиги нужны, потому что не все платы есть в `betaflight/config`
-  (например `MICOAIR743V2_EXTMAG` от MicoAir).
-- Не передавать `-D USE_SDCARD_SDIO`: для STM32H743 его уже определяет
-  платформенный `src/platform/STM32/target/STM32H743/target.h` при наличии
-  `USE_SDCARD`, и `-Werror` даёт «redefined».
-- В Betaflight 2026 нет `FEATURE_BLACKBOX` — запись включается параметром
-  `blackbox_device` (дефолт из `DEFAULT_BLACKBOX_DEVICE` в конфиге платы).
-  Таких флагов, как `USE_ELRSV4`, тоже нет: ELRS работает через
-  `USE_SERIALRX_CRSF` (+ автоматический `USE_CRSF_V3`).
-- При `USE_VTX` драйверы `USE_VTX_COMMON/CONTROL/SMARTAUDIO/TRAMP/MSP/TABLE`
-  подключаются в `common_pre.h:337` — этот блок находится **вне** гейта
-  `CLOUD_BUILD`, поэтому `-f VTX` достаточно (при наличии `VTX_DATA_PIN` в конфиге).
-- Проверять «попала ли фича в прошивку» через `nm` по `.o` нельзя (LTO) —
-  смотреть символы в `*.map` (например `sdcardSdio_isFunctional`). Для
-  статических функций (например `crsfRxInit`) символа в map может не быть —
-  LTO их интернирует/встраивает; смотреть **другие** символы фичи (для CRSF RX
-  — `crsfDataReceive`, `crsfChannelData`; в `nm` финального `.elf`). Строки
-  `LOAD .../<file>.o` в map — НЕ доказательство: файл, целиком выключенный
-  `#ifdef`, тоже даёт LOAD-строку пустого объекта. `serialRxBytesWaiting` —
-  общая функция `io/serial.c`, она есть всегда и про протоколы RX ничего не
-  говорит. Тулчейн (`arm-none-eabi-nm/objdump`) — в docker-образе,
-  `/opt/betaflight/tools/.../bin`, в PATH его нет.
-- `USE_RX_MSP`/`USE_RX_MSP_OVERRIDE` определяются в `common_pre.h:366` вне
-  гейта `CLOUD_BUILD` — MSP-RX (каналы по MSP от HDZero/Walksnail и т.п.)
-  есть в любой сборке; отдельным флагом не включается. Блок дефолтов
-  «всех фич» в common_pre.h — это `#if !defined(CLOUD_BUILD)` (строки 52–282),
-  вне него — условные автозависимости (CRSF v3 и т.п.).
+- Betaflight 2026.6.2 requires **exactly** `arm-none-eabi-gcc 13.3.1`
+  (`GCC_REQUIRED_VERSION` in `mk/tools.mk`). The host compiler won't do; the
+  toolchain lives inside the docker image (`TOOLS_DIR=/opt/betaflight/tools`).
+  Do not add host toolchain detection/installation.
+- Binutils (`arm-none-eabi-nm/objdump/size`) are inside the image but **not in
+  PATH** — use the full path `/opt/betaflight/tools/arm-gnu-toolchain-13.3.rel1-x86_64-arm-none-eabi/bin/…`.
+- The container runs with `-u "$(id -u):$(id -g)"` so that artifacts under
+  `betaflight/obj` belong to the user. The image already configures
+  `safe.directory`.
+- `-c` also accepts ready-made root directories with `configs/...` layout (e.g.
+  a user's own `BETAFLIGHT_CONFIG`) — do not break that scenario.
+- Custom configs exist because not every board is in `betaflight/config`
+  (e.g. MicoAir's `MICOAIR743V2_EXTMAG`).
+- Never pass `-D USE_SDCARD_SDIO`: for STM32H743 the platform
+  `src/platform/STM32/target/STM32H743/target.h` (:71–81) already defines it
+  when `USE_SDCARD` is set, and `-Werror` fails with "redefined".
+- Betaflight 2026 has no `FEATURE_BLACKBOX` — logging is enabled by the
+  `blackbox_device` parameter (default from `DEFAULT_BLACKBOX_DEVICE` in the
+  board config). There are also no flags like `USE_ELRSV4`: ELRS works via
+  `USE_SERIALRX_CRSF` (+ automatic `USE_CRSF_V3`, `common_pre.h:481`).
+- With `USE_VTX` the drivers `USE_VTX_COMMON/CONTROL/SMARTAUDIO/TRAMP/MSP/TABLE`
+  are attached at `common_pre.h:337` — that block is **outside** the
+  `CLOUD_BUILD` gate, so `-f VTX` is enough (provided `VTX_DATA_PIN` in the config).
+- Verifying "did the feature make it into the firmware" via `nm` on `.o` files
+  does not work (LTO) — look at symbols in the `*.map` / final `.elf`
+  (e.g. `sdcardSdio_isFunctional`). Static functions (e.g. `crsfRxInit`) may
+  have no symbol at all — LTO internalizes/inlines them; look for **other**
+  symbols of the feature (for CRSF RX: `crsfDataReceive`, `crsfChannelData`).
+  `LOAD .../<file>.o` lines in the map are NOT proof: a file entirely disabled
+  by `#ifdef` still produces a LOAD line for its empty object.
+  `serialRxBytesWaiting` is a generic `io/serial.c` function, always present,
+  it says nothing about RX protocols.
+- `USE_RX_MSP`/`USE_RX_MSP_OVERRIDE` (+ RSSI_DBM/RSNR/link quality) are defined
+  at `common_pre.h:408–412` **outside** the `CLOUD_BUILD` gate — MSP-RX (RC
+  channels over MSP from HDZero/Walksnail etc.) is in every build, no flag
+  needed. The "all features by default" block in `common_pre.h` is
+  `#if !defined(CLOUD_BUILD)` (lines 104–319); outside it there are only
+  conditional auto-dependencies (CRSF v3 and friends).
+- `common_post.h` sweeps orphan defines: without `USE_SERIALRX` all
+  `USE_SERIALRX_*` (:340), without `USE_TELEMETRY` all `USE_TELEMETRY_*`
+  (:354), without `USE_SERIALRX_CRSF` — CRSF telemetry/`USE_CRSF_V3` (:393);
+  FPORT/IBUS_EXTENDED/JETIEXBUS re-add their telemetry (:368–392), ELRS forces
+  CRSF telemetry (:773–776).
 
-## Как проверять изменения
+## How to verify changes
 
-Перед коммитом:
+Before committing:
 
 ```bash
-bash -n build_generic.sh                     # синтаксис
-./build_generic.sh --help >/dev/null         # справка
-./build_generic.sh --list-options | head     # маппинг опций
-./build_generic.sh --list-configs | head     # стандартные конфиги
-./build_generic.sh --list-targets | head     # базовые таргеты
-./build_generic.sh MICOAIR743V2EXTMAG        # негативный кейс: подсказки похожих имён
-./build_generic.sh MICOAIR743V2 --radio CRSF --feat "Foo Bar"   # негативный кейс опции
-./build_generic.sh -t STM32H743 --radio CRSF,MAVLINK --preview  # список радио + показ команды
+bash -n build_generic.sh                     # syntax
+./build_generic.sh --help >/dev/null         # usage
+./build_generic.sh --list-options | head     # options mapping
+./build_generic.sh --list-configs | head     # standard board configs
+./build_generic.sh --list-targets | head     # base MCU targets
+./build_generic.sh MICOAIR743V2EXTMAG        # negative case: similar-name hints
+./build_generic.sh MICOAIR743V2 --radio CRSF --feat "Foo Bar"   # negative option case
+./build_generic.sh -t STM32H743 --radio CRSF,MAVLINK --preview  # radio list + command preview
+./build_generic.sh -t STM32H743 --radio MAVLINK -v --preview    # MAVLINK auto-telemetry defines + mapping notes
 ```
 
-Полная проверка (несколько минут, нужен docker и сеть):
+Full check (a few minutes, needs docker and network):
 
 ```bash
-# кастомный config.h (MicoAir743V2_EXTMAG)
+# custom config.h (MicoAir743V2_EXTMAG)
 ./build_generic.sh -c https://raw.githubusercontent.com/micoair/MicoAir743v2/main/Firmware/Betaflight/target/MICOAIR743V2_EXTMAG/config.h \
     --radio CRSF --osd Digital --motor DSHOT \
     -f "Altitude Hold,Batt. Continue,Dashboard,LED Strip,Pin IO,Chirp"
-# стандартный конфиг
+# standard board config
 ./build_generic.sh MICOAIR743V2 --radio CRSF --osd Digital --motor DSHOT -f "GPS,VTX,LED Strip"
-# базовый MCU-таргет
+# base MCU target
 ./build_generic.sh -t STM32H743 --motor DSHOT
 ```
 
-Ожидаемый признак успеха: `Creating HEX ./obj/betaflight_<версия>_<цель>.hex`
-и строка `==> Готово:`. MD5 hex **не** является признаком идентичности сборок:
-Betaflight встраивает дату сборки в `version.o`, поэтому хеши различаются даже
-при одинаковом наборе опций. Для проверки эквивалентности сравнивайте строку
-`==> Опции:` и usage-строки из `map`-файла.
+Expected success markers: `Creating HEX ./obj/betaflight_<version>_<target>.hex`
+and the `==> Done:` line. The hex MD5 is **not** an identity check: Betaflight
+embeds the build date into `version.o`, so hashes differ even for the same set
+of options. To check equivalence compare the `==> Options:` line and usage
+lines from the `map` file.
 
-## Соглашения
+## Conventions
 
-- Bash: `set -euo pipefail`; `if`/`fi` вместо `cmd && action` верхнего уровня;
-  `${arr[@]+"${arr[@]}"}` для пустых массивов; `[[ ]]` только для паттернов.
-- Скрипт самодостаточен: один файл, без внешних зависимостей кроме
-  `docker`/`git`/`curl`/`python3` на хосте. Не вводите сборку/установку пакетов.
-- Сообщения пользователю и справка — на русском, имена флагов — английские.
-- Логи сборки не перенаправлять в файл (кроме логов, уже принятых в скрипте) —
-  пользователю нужен живой вывод `make`.
-- Изменения опционных правил должны сопровождаться правкой таблиц в `README.md`
-  (полный список опций генерируется из `--list-options`).
+- Bash: `set -euo pipefail`; `if`/`fi` instead of top-level `cmd && action`;
+  `${arr[@]+"${arr[@]}"}` for possibly-empty arrays; `[[ ]]` only for patterns.
+- The script is self-contained: one file, no external dependencies beyond
+  `docker`/`git`/`curl`/`python3` on the host. Do not introduce package builds
+  or installations.
+- Script user-facing text (usage, errors, log lines) is **English**.
+  Documentation is bilingual: `README.md` (Russian) + `README.en.md` (English),
+  cross-linked at the top of both; `AGENTS.md` is English only. When you change
+  user-visible behavior, update both READMEs.
+- Do not redirect build logs to a file (except logs already adopted in the
+  script) — the user needs live `make` output.
+- Changes to option rules must be accompanied by updates to the tables in both
+  READMEs (the full option list is generated from `--list-options`).
 
-## Чего не делать
+## What not to do
 
-- Не коммитить `betaflight/`, `dist/`, `.build/`, `*.hex`, `*.elf`, `*.map`,
-  cli-дампы Configurator (`*cli_backup*`) и любые прошивки.
-- Не заменять docker-образ на установку тулчейна на хосте и не понижать/повышать
-  версию GCC в обход образа.
-- Не хранить секреты/токены; доступ к GitHub — через `gh`/SSH.
-- Не переписывать скрипт под одну конкретную плату — приватные варианты вроде
-  `build_micoair743v2_extmag.sh` не плодить: они воспроизводятся одной командой
-  `build_generic.sh` (пример в README).
+- Do not commit `betaflight/`, `dist/`, `.build/`, `*.hex`, `*.elf`, `*.map`,
+  Configurator CLI dumps (`*cli_backup*`) or any firmware.
+- Do not replace the docker image with a host toolchain install, and do not
+  bump/downgrade the GCC version bypassing the image.
+- Do not store secrets/tokens; GitHub access goes through `gh`/SSH.
+- Do not rewrite the script around one specific board — do not spawn private
+  variants like `build_micoair743v2_extmag.sh`: they are reproduced with a
+  single `build_generic.sh` command (example in the READMEs).
 
-## Полезные внешние ссылки
+## Useful external references
 
-- Build API опций: `https://build.betaflight.com/api/options/<версия>`
-- Конфиги плат: https://github.com/betaflight/config
-- Docker-образы тулчейна: https://github.com/betaflight/betaflight-build
-- Система сборки Betaflight: `Makefile`, `mk/config.mk`, `mk/tools.mk`,
-  `src/main/target/common_pre.h`, `src/main/msp/msp_build_info.h`
+- Build API options: `https://build.betaflight.com/api/options/<version>`
+  (builds: `POST https://build.betaflight.com/api/builds`, the echo shows the
+  server-side auto-defines)
+- Board configs: https://github.com/betaflight/config
+- Toolchain docker images: https://github.com/betaflight/betaflight-build
+- Betaflight build system: `Makefile`, `mk/config.mk`, `mk/tools.mk`,
+  `src/main/target/common_pre.h`, `src/main/target/common_post.h`,
+  `src/main/msp/msp_build_info.h`

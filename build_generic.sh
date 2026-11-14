@@ -1,17 +1,17 @@
 #!/usr/bin/env bash
 #
-# build_generic.sh — универсальная сборка прошивок Betaflight в официальном
-# docker-образе тулчейна (betaflight/betaflight-build).
+# build_generic.sh — universal Betaflight firmware build inside the official
+# toolchain docker image (betaflight/betaflight-build).
 #
-# Поддерживает:
-#   * стандартные конфиги плат из betaflight/config (MATEKF405TE, MICOAIR743V2, ...)
-#   * кастомные конфиги: config.h файлом, URL или каталогом с configs/<ИМЯ>/config.h
-#     (например MicoAir743V2_EXTMAG из https://github.com/micoair/MicoAir743v2)
-#   * базовые MCU-таргеты без конфига платы (STM32H743, STM32F405, ...)
+# Supports:
+#   * standard board configs from betaflight/config (MATEKF405TE, MICOAIR743V2, ...)
+#   * custom configs: config.h as a file, URL or a directory with configs/<NAME>/config.h
+#     (e.g. MicoAir743V2_EXTMAG from https://github.com/micoair/MicoAir743v2)
+#   * base MCU targets without a board config (STM32H743, STM32F405, ...)
 #
-# Опции задаются «человеческими» именами как в мастере прошивки Configurator
-# (--radio/--telemetry/--osd/--motor/--feat) и транслируются в defines по
-# официальному API https://build.betaflight.com/api/options/<version>
+# Options use the human names from the Configurator firmware flasher
+# (--radio/--telemetry/--osd/--motor/--feat) and are translated into make
+# defines via the official API https://build.betaflight.com/api/options/<version>
 #
 set -euo pipefail
 
@@ -23,71 +23,73 @@ BUILD_API="https://build.betaflight.com"
 
 usage() {
 cat <<'EOF'
-Использование:
-  ./build_generic.sh [параметры] <конфиг|таргет>
+Usage:
+  ./build_generic.sh [options] <config|target>
 
-Цель сборки:
-  <ИМЯ>                    стандартный конфиг платы из betaflight/config
-                           (MATEKF405TE, MICOAIR743V2, ...); см. --list-configs.
-                           Со --config — имя кастомного конфига.
-  -t, --target <ИМЯ>       базовый MCU-таргет без конфига платы (STM32H743,
-                           STM32F405, AT32F435G, ...); см. --list-targets
-  -c, --config <Файл|URL|Каталог>
-                           кастомный config.h: файл, URL на него, каталог config.h
-                           или каталог-корень с layouts configs/<ИМЯ>/config.h.
-                           MCU берётся из FC_TARGET_MCU внутри config.h.
-  -n, --name <ИМЯ>         имя кастомного конфига (по умолчанию — имя каталога
-                           вокруг config.h или имя из URL)
+Build target:
+  <NAME>                   standard board config from betaflight/config
+                           (MATEKF405TE, MICOAIR743V2, ...); see --list-configs.
+                           With --config — the custom config name.
+  -t, --target <NAME>      base MCU target without a board config (STM32H743,
+                           STM32F405, AT32F435G, ...); see --list-targets
+  -c, --config <File|URL|Dir>
+                           custom config.h: a file, its URL, a directory holding
+                           config.h or a root directory with configs/<NAME>/config.h
+                           layouts. MCU comes from FC_TARGET_MCU inside config.h.
+  -n, --name <NAME>        custom config name (default: the directory name around
+                           config.h, or the name taken from the URL)
 
-Параметры:
-  -b, --bf-version <ВЕР>   версия Betaflight: тег/ветка (дефолт: 2026.6.2)
-  -i, --image <ОБРАЗ>      docker-образ тулчейна (дефолт: betaflight/betaflight-build:arm)
-  --radio <СПИСОК>         CRSF | FPORT | GHOST | IBUS | JETIEXBUS | MAVLINK | PPM |
+Options:
+  -b, --bf-version <VER>   Betaflight version: tag/branch (default: 2026.6.2)
+  -i, --image <IMAGE>      toolchain docker image (default: betaflight/betaflight-build:arm)
+  --radio <LIST>           CRSF | FPORT | GHOST | IBUS | JETIEXBUS | MAVLINK | PPM |
                            SBUS | SPEKTRUM | SRXL2 | SUMD | SUMH | XBUS;
-                           можно несколько через запятую: --radio CRSF,MAVLINK
-  --telemetry <СПИСОК>     FRSKY_HUB | HOTT | IBUS_EXTENDED | LTM | MAVLINK |
-                           SMARTPORT | SRXL | none (списком, как --radio)
-                           (CRSF/GHOST/FPORT/JETIEXBUS включают телеметрию сами)
-  --osd <СПИСОК>           Analog | Digital | FrSky | none (можно несколько)
-  --motor <СПИСОК>         BRUSHED | DSHOT | MULTISHOT | ONESHOT | PROSHOT | PWM
-  -f, --feat <СПИСОК>      доп. опции (через запятую или параметром повторно), имена
-                           как в UI мастера: "Altitude Hold", "Batt. Continue",
+                           several allowed, comma-separated: --radio CRSF,MAVLINK
+  --telemetry <LIST>       FRSKY_HUB | HOTT | IBUS_EXTENDED | LTM | MAVLINK |
+                           SMARTPORT | SRXL | none (list, same as --radio)
+                           (CRSF/GHOST/FPORT/JETIEXBUS enable telemetry themselves)
+  --osd <LIST>             Analog | Digital | FrSky | none (several allowed)
+  --motor <LIST>           BRUSHED | DSHOT | MULTISHOT | ONESHOT | PROSHOT | PWM
+  -f, --feat <LIST>        extra options (comma-separated or repeated flag), names
+                           as in the UI: "Altitude Hold", "Batt. Continue",
                            "Dashboard", "LED Strip", "Pin IO", "Chirp", GPS, VTX...
-                           Полный список всех возможных: --list-options
-  -D, --define <DEFINE>    произвольный define, минуя API (повторяемо),
-                           напр. USE_EMFAT_TOOLS, USE_USB_CDC_HID
-  --plain                  не добавлять CLOUD_BUILD: выбранные опции накладываются
-                           поверх «всех по умолчанию» (plain-режим make)
-  --preview, --dry-run     показать команду docker/make вместо запуска сборки
-  --list-options           полный список всех опций выбранной версии BF (из API)
-  --list-configs           список стандартных конфигов плат
-  --list-targets           список базовых MCU-таргетов
-  -h, --help               эта справка
+                           Full list of all available: --list-options
+  -D, --define <DEFINE>    arbitrary define, bypassing the API (repeatable),
+                           e.g. USE_EMFAT_TOOLS, USE_USB_CDC_HID
+  -v, --verbose            print the option mapping notes (# name -> DEFINE,
+                           # auto: +DEFINE)
+  --plain                  do not add CLOUD_BUILD: chosen options are layered on
+                           top of the "all features by default" (plain make build)
+  --preview, --dry-run     print the docker/make command instead of building
+  --list-options           full list of all options of the chosen BF version (from API)
+  --list-configs           list of standard board configs
+  --list-targets           list of base MCU targets
+  -h, --help               this help
 
-Примеры:
-  # стандартный конфиг MicoAir743V2 из betaflight/config
+Examples:
+  # standard MicoAir743V2 board config from betaflight/config
   ./build_generic.sh MICOAIR743V2 --radio CRSF --osd Digital --motor DSHOT \
       -f "GPS,VTX,LED Strip"
 
-  # кастомный config.h MicoAir — версия с внешним магнитометром (MICOAIR743V2_EXTMAG)
+  # custom MicoAir config.h — external-magnetometer variant (MICOAIR743V2_EXTMAG)
   ./build_generic.sh -c https://raw.githubusercontent.com/micoair/MicoAir743v2/main/Firmware/Betaflight/target/MICOAIR743V2_EXTMAG/config.h \
       --radio CRSF --osd Digital --motor DSHOT \
       -f "Altitude Hold,Batt. Continue,Dashboard,LED Strip,Pin IO,Chirp"
 
-  # базовый таргет STM32H743 (все фичи по умолчанию, без конфига платы)
+  # base STM32H743 target (all default features, no board config)
   ./build_generic.sh -t STM32H743
 
-  # несколько радио-протоколов в одной прошивке + показ команды вместо сборки
+  # several radio protocols in one firmware + show the command instead of building
   ./build_generic.sh -t STM32H743 --radio CRSF,MAVLINK --motor DSHOT --preview
 
-Результат: dist/betaflight_<версия>_<цель>.hex (elf/map — в betaflight/obj/)
+Result: dist/betaflight_<version>_<target>.hex (elf/map — in betaflight/obj/)
 EOF
 }
 
-# ------------------------------ разбор аргументов -----------------------------
+# ------------------------------ argument parsing ------------------------------
 declare -a FEATS=() DEFINES=() RADIOS=() TELEMETRIES=() OSDS=() MOTORS=()
 CONFIG_SRC="" NAME_ARG="" TARGET_ARG=""
-TARGET_MODE=0 PLAIN=0 PREVIEW=0 LIST_OPTS=0 LIST_CFG=0 LIST_TGT=0
+TARGET_MODE=0 PLAIN=0 PREVIEW=0 VERBOSE=0 LIST_OPTS=0 LIST_CFG=0 LIST_TGT=0
 
 while (($#)); do
     case "$1" in
@@ -103,12 +105,13 @@ while (($#)); do
         --osd)           IFS=',' read -ra _p <<<"$2"; OSDS+=("${_p[@]}"); shift 2;;
         --motor)         IFS=',' read -ra _p <<<"$2"; MOTORS+=("${_p[@]}"); shift 2;;
         --plain)         PLAIN=1; shift;;
+        -v|--verbose)    VERBOSE=1; shift;;
         --preview|--dry-run) PREVIEW=1; shift;;
         --list-options)  LIST_OPTS=1; shift;;
         --list-configs)  LIST_CFG=1; shift;;
         --list-targets)  LIST_TGT=1; shift;;
         -h|--help)       usage; exit 0;;
-        -*)              echo "Неизвестный параметр: $1" >&2; usage >&2; exit 1;;
+        -*)              echo "Unknown option: $1" >&2; usage >&2; exit 1;;
         *)               NAME_ARG="$1"; shift;;
     esac
 done
@@ -121,7 +124,7 @@ fetch_options() {
     if [ ! -s "$OPT_JSON" ]; then
         curl -fsSL --retry 3 -o "$OPT_JSON" "$BUILD_API/api/options/${BF_VERSION}" \
             || { rm -f "$OPT_JSON"
-                 echo "Ошибка: build API не знает версию '${BF_VERSION}'. Опции задавайте через -D USE_XXX" >&2
+                 echo "Error: build API does not know version '${BF_VERSION}'. Pass options via -D USE_XXX" >&2
                  exit 1; }
     fi
 }
@@ -138,8 +141,8 @@ ensure_sources() {
 }
 
 ensure_submodules() {
-    # все submodule'ы репо, последовательно на хосте: параллельные
-    # git submodule update конфликтуют на lock-файле .git/config
+    # all repo submodules, sequentially on the host: concurrent
+    # git submodule update calls race on the .git/config lock file
     git -C betaflight submodule update --init --recursive
 }
 
@@ -148,7 +151,7 @@ base_targets() {
         | awk -F/ '{print $(NF-1)}' | sort -u
 }
 
-# ------------------------------- list-режимы ----------------------------------
+# -------------------------------- list modes ----------------------------------
 if ((LIST_OPTS)); then
     fetch_options
     python3 - "$OPT_JSON" <<'PY'
@@ -166,7 +169,7 @@ for sec, title in (("radioProtocols", "Radio Protocol"),
         name = it["name"]
         if it.get("group") and it.get("groupedName"):
             name = f"{it['group']} [{it['groupedName']}]"
-        print(f"  {name:28s} {it['value'] or '(нет)':26s} {', '.join(flags)}")
+        print(f"  {name:28s} {it['value'] or '(none)':26s} {', '.join(flags)}")
 PY
     exit 0
 fi
@@ -184,13 +187,13 @@ if ((LIST_TGT)); then
     exit 0
 fi
 
-# --------------------------- выбор режима сборки ------------------------------
+# ----------------------------- build mode selection ---------------------------
 if [ -n "$TARGET_ARG" ]; then
     TARGET_MODE=1
     NAME_ARG="$TARGET_ARG"
 fi
 
-CUSTOM_ROOT=""   # каталог, передаваемый в контейнер как BETAFLIGHT_CONFIG
+CUSTOM_ROOT=""   # directory handed to the container as BETAFLIGHT_CONFIG
 BUILD_NAME="$NAME_ARG"
 
 if [ -n "$CONFIG_SRC" ]; then
@@ -202,11 +205,11 @@ if [ -n "$CONFIG_SRC" ]; then
         esac
     fi
     if [ -d "$CONFIG_SRC" ] && [ -d "$CONFIG_SRC/configs" ]; then
-        # готовый каталог CONFIG_DIR: configs/<ИМЯ>/config.h или configs/<MFR>/<ИМЯ>/config.h
+        # ready-made CONFIG_DIR: configs/<NAME>/config.h or configs/<MFR>/<NAME>/config.h
         CUSTOM_ROOT="$(realpath "$CONFIG_SRC")"
         cfgs="$(find "$CUSTOM_ROOT/configs" -mindepth 2 -maxdepth 3 -name config.h)"
         if [ -z "$cfgs" ]; then
-            echo "Ошибка: в '$CUSTOM_ROOT/configs' нет ни одного config.h" >&2; exit 1
+            echo "Error: no config.h found under '$CUSTOM_ROOT/configs'" >&2; exit 1
         fi
         if [ "$(echo "$cfgs" | wc -l)" -eq 1 ] && [ -z "$NAME_ARG" ]; then
             BUILD_NAME="$(basename "$(dirname "$cfgs")")"
@@ -218,7 +221,7 @@ if [ -n "$CONFIG_SRC" ]; then
         elif [ -f "$CONFIG_SRC" ]; then
             file="$CONFIG_SRC"
         elif [[ "$CONFIG_SRC" != http* ]]; then
-            echo "Ошибка: config.h не найден: $CONFIG_SRC" >&2; exit 1
+            echo "Error: config.h not found: $CONFIG_SRC" >&2; exit 1
         fi
         CUSTOM_ROOT="$(pwd)/.build/configs"
         mkdir -p "$CUSTOM_ROOT/configs/$BUILD_NAME"
@@ -235,11 +238,11 @@ fi
 
 if ((TARGET_MODE)); then
     if [ -n "$CONFIG_SRC" ]; then
-        echo "Ошибка: --target не сочетается с --config" >&2; exit 1
+        echo "Error: --target cannot be combined with --config" >&2; exit 1
     fi
     ensure_sources
     if ! base_targets | grep -qx "$BUILD_NAME"; then
-        echo "Ошибка: '$BUILD_NAME' нет среди базовых таргетов. Похожие:" >&2
+        echo "Error: '$BUILD_NAME' is not among the base targets. Similar:" >&2
         base_targets | grep -i -- "$(echo "$BUILD_NAME" | cut -c1-6)" | head -10 >&2 || true
         exit 1
     fi
@@ -252,16 +255,16 @@ else
     found="$(find betaflight/src/config/configs -mindepth 2 -maxdepth 3 -type d \
                  -name "$BUILD_NAME" -exec test -e '{}/config.h' ';' -print -quit)"
     if [ -z "$found" ]; then
-        echo "Ошибка: конфиг '$BUILD_NAME' не найден в betaflight/config. Похожие:" >&2
+        echo "Error: config '$BUILD_NAME' not found in betaflight/config. Similar:" >&2
         find betaflight/src/config/configs -mindepth 2 -maxdepth 3 -name config.h \
             | awk -F/ '{print $(NF-1)}' | grep -i -- "$(echo "$BUILD_NAME" | cut -c1-6)" | head -10 >&2 || true
-        echo "(кастомный конфиг — параметр -c/--config)" >&2
+        echo "(custom config — use -c/--config)" >&2
         exit 1
     fi
     MAKE_VARIANT=("CONFIG=$BUILD_NAME")
 fi
 
-# ------------------------- опции -> defines (через API) -----------------------
+# -------------------------- options -> defines (via API) ----------------------
 declare -a MAP_SEL=()
 for r in "${RADIOS[@]+"${RADIOS[@]}"}"; do MAP_SEL+=("radio	$r"); done
 for t in "${TELEMETRIES[@]+"${TELEMETRIES[@]}"}"; do MAP_SEL+=("telemetry	$t"); done
@@ -274,8 +277,8 @@ if ((${#MAP_SEL[@]} || ${#DEFINES[@]})); then HAVE_OPTS=1; fi
 OPTIONS=""
 if ((HAVE_OPTS)); then
     fetch_options
-    DEFS="$(python3 - "$OPT_JSON" "${MAP_SEL[@]+"${MAP_SEL[@]}"}" <<'PY'
-import json, sys
+    DEFS="$(BF_VERBOSE="$VERBOSE" python3 - "$OPT_JSON" "${MAP_SEL[@]+"${MAP_SEL[@]}"}" <<'PY'
+import json, os, sys
 
 path = sys.argv[1]
 tokens = [t.split("\t", 1) for t in sys.argv[2:]]
@@ -285,7 +288,7 @@ sections = [("radio", d["radioProtocols"]),
             ("general", d["generalOptions"]),
             ("motor", d["motorProtocols"])]
 
-# телеметрия, автоматически включаемая вместе с радио-протоколом
+# telemetry automatically enabled together with the radio protocol
 radio_telemetry = {"USE_SERIALRX_CRSF": "USE_TELEMETRY_CRSF",
                    "USE_SERIALRX_FPORT": "USE_TELEMETRY_SMARTPORT",
                    "USE_SERIALRX_GHST": "USE_TELEMETRY_GHST",
@@ -317,19 +320,19 @@ def lookup(sec_wanted, tok):
         if len(strict) == 1:
             cands = strict
     if len(cands) > 1:
-        print("Неоднозначно: '%s': %s" % (tok, "; ".join(
+        print("Ambiguous: '%s': %s" % (tok, "; ".join(
             f"{c[1]['name']}={c[1]['value']}" for c in cands)), file=sys.stderr)
         sys.exit(2)
     return cands[0]
 
 defines, notes = [], []
 for sec_wanted, tok in tokens:
-    if tok.strip().lower() in ("none", "нет", ""):
+    if tok.strip().lower() in ("none", ""):
         continue
     hit = lookup(sec_wanted, tok)
     if hit is None:
-        print(f"Неизвестная опция: '{tok}' (секция {sec_wanted}). "
-              f"Полный список: --list-options", file=sys.stderr)
+        print(f"Unknown option: '{tok}' (section {sec_wanted}). "
+              f"Full list: --list-options", file=sys.stderr)
         sys.exit(2)
     sec, it = hit
     defines.append(it["value"])
@@ -341,7 +344,7 @@ for sec_wanted, tok in tokens:
         extra = radio_telemetry.get(it["value"])
         if extra:
             defines.append(extra)
-            notes.append(f"авто-телеметрия: {it['name']} -> {extra}")
+            notes.append(f"auto-telemetry: {it['name']} -> {extra}")
     if sec == "telemetry" and it["value"]:
         defines.append("USE_TELEMETRY")
 
@@ -350,8 +353,9 @@ for x in defines:
     if x not in seen:
         seen.add(x)
         out.append(x)
-for n in notes:
-    print("  # " + n, file=sys.stderr)
+if os.environ.get("BF_VERBOSE") == "1":
+    for n in notes:
+        print("  # " + n, file=sys.stderr)
 print(" ".join(out))
 PY
 )"
@@ -361,13 +365,18 @@ PY
     OPT_LIST+=("${_d[@]}")
     for u in "${DEFINES[@]+"${DEFINES[@]}"}"; do OPT_LIST+=("$u"); done
 
-    # авто-дополнения, которые делает и build.betaflight.com (без них common_post.h
-    # выкизывает протоколы: USE_SERIALRX_* без USE_SERIALRX не компилируются):
+    # umbrella defines added the same way by build.betaflight.com (without them
+    # common_post.h drops the protocols: USE_SERIALRX_* won't compile without USE_SERIALRX).
+    # MAVLINK additionally needs USE_TELEMETRY(+MAVLINK): the SERIALRX_MAVLINK provider
+    # can not work without TELEMETRY_MAVLINK (common_pre.h:494), but the build server
+    # does not send it and common_post.h:355 sweeps it out without the USE_TELEMETRY umbrella:
     #   USE_SERIALRX_* -> USE_SERIALRX, USE_TELEMETRY_* -> USE_TELEMETRY,
+    #   USE_SERIALRX_MAVLINK -> USE_TELEMETRY + USE_TELEMETRY_MAVLINK,
     #   USE_RX_PPM -> USE_PPM, USE_GPS -> USE_ALTITUDE_HOLD/USE_GPS_PLUS_CODES/USE_POSITION_HOLD
     declare -a _exp=()
     for o in "${OPT_LIST[@]}"; do
         case "$o" in
+            USE_SERIALRX_MAVLINK) _exp+=("USE_SERIALRX" "USE_TELEMETRY" "USE_TELEMETRY_MAVLINK");;
             USE_SERIALRX_*)  _exp+=("USE_SERIALRX");;
             USE_TELEMETRY_*) _exp+=("USE_TELEMETRY");;
             USE_RX_PPM)      _exp+=("USE_PPM");;
@@ -381,13 +390,13 @@ PY
         done
         if ((present == 0)); then
             OPT_LIST+=("$o")
-            echo "  # авто: +$o" >&2
+            if ((VERBOSE)); then echo "  # auto: +$o" >&2; fi
         fi
     done
     OPTIONS="${OPT_LIST[*]}"
 fi
 
-# ------------------------------ сборка (docker) -------------------------------
+# ------------------------------- build (docker) -------------------------------
 ensure_sources
 ensure_submodules
 
@@ -399,12 +408,12 @@ MAKE_ARGS=(-j)
 if [ -n "$OPTIONS" ]; then MAKE_ARGS+=("OPTIONS=$OPTIONS"); fi
 MAKE_ARGS+=("${MAKE_VARIANT[@]}" hex)
 
-echo "==> Цель: ${MAKE_VARIANT[*]}"
-if [ -n "$OPTIONS" ]; then echo "==> Опции: $OPTIONS"; fi
+echo "==> Target: ${MAKE_VARIANT[*]}"
+if [ -n "$OPTIONS" ]; then echo "==> Options: $OPTIONS"; fi
 
 DOCKER_CMD=(docker "${DOCKER_ARGS[@]}" "$IMAGE" make "${MAKE_ARGS[@]}")
 if ((PREVIEW)); then
-    echo "==> Команда сборки (preview, ничего не запускается):"
+    echo "==> Build command (preview, nothing is run):"
     _q=""
     for _a in "${DOCKER_CMD[@]}"; do
         case "$_a" in
@@ -420,12 +429,12 @@ STAMP="$(mktemp)"
 trap 'rm -f "$STAMP"' EXIT
 docker "${DOCKER_ARGS[@]}" "$IMAGE" make "${MAKE_ARGS[@]}"
 
-# ------------------------------ результат -------------------------------------
+# --------------------------------- result -------------------------------------
 mkdir -p dist
 new_hexes="$(find betaflight/obj -maxdepth 1 -name '*.hex' -newer "$STAMP")"
 if [ -n "$new_hexes" ]; then
     echo "$new_hexes" | while read -r h; do cp -v "$h" dist/; done
-    echo "==> Готово: $(echo "$new_hexes" | head -1)"
+    echo "==> Done: $(echo "$new_hexes" | head -1)"
 else
-    echo "Внимание: новых .hex в betaflight/obj/ не найдено" >&2
+    echo "Warning: no new .hex found in betaflight/obj/" >&2
 fi
