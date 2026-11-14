@@ -78,6 +78,18 @@ dist/              # готовые .hex
   пользовательский `BETAFLIGHT_CONFIG`) — не ломайте этот сценарий.
 - Кастомные конфиги нужны, потому что не все платы есть в `betaflight/config`
   (например `MICOAIR743V2_EXTMAG` от MicoAir).
+- Не передавать `-D USE_SDCARD_SDIO`: для STM32H743 его уже определяет
+  платформенный `src/platform/STM32/target/STM32H743/target.h` при наличии
+  `USE_SDCARD`, и `-Werror` даёт «redefined».
+- В Betaflight 2026 нет `FEATURE_BLACKBOX` — запись включается параметром
+  `blackbox_device` (дефолт из `DEFAULT_BLACKBOX_DEVICE` в конфиге платы).
+  Таких флагов, как `USE_ELRSV4`, тоже нет: ELRS работает через
+  `USE_SERIALRX_CRSF` (+ автоматический `USE_CRSF_V3`).
+- При `USE_VTX` драйверы `USE_VTX_COMMON/CONTROL/SMARTAUDIO/TRAMP/MSP/TABLE`
+  подключаются в `common_pre.h:337` — этот блок находится **вне** гейта
+  `CLOUD_BUILD`, поэтому `-f VTX` достаточно (при наличии `VTX_DATA_PIN` в конфиге).
+- Проверять «попала ли фича в прошивку» через `nm` по `.o` нельзя (LTO) —
+  смотреть символы в `*.map` (например `sdcardSdio_isFunctional`).
 
 ## Как проверять изменения
 

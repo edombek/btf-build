@@ -184,6 +184,43 @@
 - GPS (UART3 в конфиге платы) в набор со скриншота не входит; добавляется `-f GPS`
   (GPS Rescue подтягивается автоматически).
 
+## Частые вопросы по MicoAir743V2: SD-карта, VTX, ELRS
+
+### SD-карта / BlackBox
+
+- Драйвер SD-карты **уже включён** в прошивку: платформенный
+  `src/platform/STM32/target/STM32H743/target.h` автоматически определяет
+  `USE_SDCARD_SDIO`/`USE_SDCARD_SPI` при наличии `USE_SDCARD` в конфиге платы
+  (он там есть). Передавать `-D USE_SDCARD_SDIO` не нужно — будет ошибка
+  `-Werror: "USE_SDCARD_SDIO" redefined`. Проверить наличие в прошивке:
+  `grep sdcardSdio_isFunctional betaflight/obj/main/*.map`.
+- В Betaflight 2026 больше **нет** переключателя `feature blackbox` — запись
+  включается параметром `blackbox_device` (в конфиге MicoAir по умолчанию уже
+  `sdcard`). Если карта «не работает»: прошивка с Full chip erase, затем в CLI
+  `sdcard_info` (должна видеться карта), `show blackbox_device`, `save`.
+
+### Управление VTX по UART (SmartAudio/Tramp)
+
+В конфигах MicoAir743V2 (EXTMAG и INTMAG) **нет выводов управления VTX**
+(`VTX_DATA_PIN`/`VTX_ENABLE_PIN` не определены). Плата рассчитана на цифровые
+(HDZero) системы, где VTX управляется по MSP/DisplayPort — то есть «только MSP»
+для этой платы корректно и флагами не лечится.
+
+Если аналоговый VTX с SmartAudio физически подключён к таймерному выводу платы,
+добавьте в свой `config.h` строку `#define VTX_DATA_PIN <пин>` и собирайте
+с `-f VTX`: при `USE_VTX` драйверы `USE_VTX_COMMON/CONTROL/SMARTAUDIO/TRAMP/MSP`
+подключаются автоматически (`common_pre.h:337`, вне гейта `CLOUD_BUILD`).
+
+### ELRS
+
+Флагов вида `USE_ELRSV4` в Betaflight 2026.6.2 нет. Внешний приёмник ELRS
+(любой версии, включая 4.x) работает через CRSF — `--radio CRSF`; современный
+вариант протокола `USE_CRSF_V3` включается автоматически, дополнительных
+опций не требуется. Флаг `USE_RX_EXPRESSLRS` существует только для плат со
+встроенным SPI-модулем ELRS и требует дополнительные пины
+(`RX_EXPRESSLRS_SPI_RESET_PIN`, `RX_EXPRESSLRS_SPI_BUSY_PIN`, `RX_SPI_CS`, ...)
+в конфиге платы — в MicoAir743V2 встроенного приёмника нет.
+
 ## Проверенные сборки (Betaflight 2026.6.2)
 
 | Цель | Результат |
